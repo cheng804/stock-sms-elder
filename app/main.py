@@ -191,9 +191,9 @@ async def webhook_sms(request: Request):
     except Exception:
         return JSONResponse({"error": "invalid json"}, status_code=400)
 
-    # 驗證簽章（正式環境建議開啟）
+    # 驗證簽章（未設定 secret 時跳過）
     signature = request.headers.get("X-Signature", "")
-    if not verify_webhook_signature(body, signature):
+    if TEXTBEE_WEBHOOK_SECRET and not verify_webhook_signature(body, signature):
         logger.warning("Webhook 簽章驗證失敗，拒絕請求")
         return JSONResponse({"error": "invalid signature"}, status_code=401)
 
