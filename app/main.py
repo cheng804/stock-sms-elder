@@ -30,6 +30,8 @@ from app.sms_handler import parse_command, get_help_message
 from app.stock_fetcher import get_stock_info, get_stock_history, calculate_fair_value
 from app.ai_analyzer import generate_elder_friendly_analysis, format_simple_response
 from app.twilio_client import parse_incoming_webhook, verify_webhook_signature, send_sms
+
+TEXTBEE_WEBHOOK_SECRET = os.getenv("TEXTBEE_WEBHOOK_SECRET", "")
 from app.database import (
     get_or_create_user,
     log_query,
