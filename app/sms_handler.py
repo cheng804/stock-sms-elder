@@ -26,16 +26,15 @@ def _extract_stock_code(text: str) -> Optional[str]:
     Returns:
         股票代號字串，或 None
     """
-    # 先找數字型（台股）
-    match = re.search(r"\b(\d{4,6})\b", text)
+    # 先找數字型（台股）：不用 \b，改用 (?<!\d) (?!\d) 避免中文邊界問題
+    match = re.search(r"(?<!\d)(\d{4,6})(?!\d)", text)
     if match:
         return match.group(1)
-    # 再找英文型（美股，排除常見中文拼音）
-    match = re.search(r"\b([A-Z]{1,5})\b", text.upper())
+    # 再找英文型（美股）
+    match = re.search(r"(?<![A-Za-z])([A-Z]{1,5})(?![A-Za-z])", text.upper())
     if match:
         candidate = match.group(1)
-        # 排除指令關鍵字本身
-        if candidate not in {"HELP", "SUB", "UNSUB"}:
+        if candidate not in {"HELP", "SUB", "UNSUB", "BUY"}:
             return candidate
     return None
 
@@ -118,19 +117,19 @@ def parse_command(message: str) -> dict:
 
     # ── 買賣分析 ─────────────────────────
     buy_keywords = ["買", "分析", "要不要", "值不值", "貴不貴", "buy"]
-    for kw in buy_keywords:
-        if kw in msg or kw in msg_no_space or kw.lower() in msg.lower():
-            stock_code = _extract_stock_code(msg)
-            if stock_code:
-                return {
-                    "type": "buy_analysis",
-                    "stock_code": stock_code,
-                    "time": None,
-                    "raw": msg,
-                }
+    has_buy_keyword = any(kw in msg or kw.lower() in msg.lower() for kw in buy_keywords)
+    if has_buy_keyword:
+        stock_code = _extract_stock_code(msg)
+        if stock_code:
+            return {
+                "type": "buy_analysis",
+                "stock_code": stock_code,
+                "time": None,
+                "raw": msg,
+            }
 
     # ── 單純查價：訊息幾乎只有股票代號 ───
-    # 允許代號後面有少量空白或標點
+    # 移除空白和標點後，若只剩股票代號則視為查價
     clean = re.sub(r"[\s\.,，。！!？?]+", "", msg)
     if re.match(r"^(\d{4,6}|[A-Za-z]{1,5})$", clean):
         return {
