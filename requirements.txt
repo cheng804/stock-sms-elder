@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+yfinance
+openai
+sqlalchemy
+python-dotenv
+apscheduler
+streamlit
+plotly
+pandas
+requests

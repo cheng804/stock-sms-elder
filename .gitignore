@@ -1,0 +1,42 @@
+# 環境變數（含密碼，絕對不能上傳）
+.env
+
+# Python 虛擬環境
+venv/
+.venv/
+env/
+
+# Python 編譯檔
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# 資料庫檔案（本機測試資料）
+*.db
+*.sqlite
+*.sqlite3
+
+# 套件安裝資訊
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE 設定
+.vscode/
+.idea/
+*.iml
+
+# 作業系統產生的檔案
+.DS_Store
+Thumbs.db
+
+# pytest 測試快取
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ngrok 設定
+ngrok.yml
