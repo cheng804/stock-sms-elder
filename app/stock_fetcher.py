@@ -11,6 +11,7 @@ from typing import Optional
 
 import yfinance as yf
 import pandas as pd
+from app.stock_name_map import get_stock_name
 
 # 使用 curl_cffi 模擬 Chrome 瀏覽器，避免雲端環境被 Yahoo Finance 封鎖
 try:
@@ -37,7 +38,13 @@ def _safe_float(value) -> Optional[float]:
         return None
 
 
-def _make_ticker(normalized: str) -> yf.Ticker:
+def _get_name(info: dict, normalized: str) -> str:
+    """取公司名稱：優先從 yfinance info，其次從離線對應表。"""
+    name = info.get("shortName") or info.get("longName") or ""
+    if not name or name == normalized:
+        code = normalized.replace(".TW", "").replace(".TWO", "")
+        name = get_stock_name(code) or normalized
+    return name
     """建立 yf.Ticker，帶入 curl_cffi session。"""
     if _SESSION is not None:
         return yf.Ticker(normalized, session=_SESSION)
@@ -77,7 +84,7 @@ def get_stock_info(stock_code: str) -> dict:
             return {
                 "success": True,
                 "code": normalized,
-                "name": info.get("shortName") or info.get("longName") or normalized,
+                "name": _get_name(info, normalized),
                 "price": price,
                 "change": change,
                 "change_percent": change_pct,
@@ -99,7 +106,7 @@ def get_stock_info(stock_code: str) -> dict:
         return {
             "success": True,
             "code": normalized,
-            "name": info.get("shortName") or info.get("longName") or normalized,
+            "name": _get_name(info, normalized),
             "price": price,
             "change": change,
             "change_percent": change_pct,
