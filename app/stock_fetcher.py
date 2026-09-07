@@ -1,8 +1,8 @@
 """
 stock_fetcher.py - 股票資料抓取模組
 
-使用 yfinance 取得台股和美股的即時與歷史資料，
-並提供簡易合理價分析。
+使用 yfinance 取得台股和美股的即時與歷史資料。
+使用 curl_cffi 模擬瀏覽器，避免被 Yahoo Finance 封鎖（HTTP 401/429）。
 """
 
 import re
@@ -12,25 +12,16 @@ from typing import Optional
 import yfinance as yf
 import pandas as pd
 
+# 使用 curl_cffi 模擬 Chrome 瀏覽器，避免雲端環境被 Yahoo Finance 封鎖
+try:
+    from curl_cffi import requests as curl_requests
+    _SESSION = curl_requests.Session(impersonate="chrome")
+except ImportError:
+    _SESSION = None
 
-# ─────────────────────────────────────────
-#  Helper
-# ─────────────────────────────────────────
 
 def _normalize_stock_code(stock_code: str) -> str:
-    """
-    將輸入的股票代號正規化為 yfinance 可用的格式。
-
-    - 純數字（台股）自動加上 .TW 後綴
-    - 已有後綴者直接回傳
-    - 美股英文字母直接回傳
-
-    Args:
-        stock_code: 使用者輸入的股票代號，例如 "2330"、"2330.TW"、"AAPL"
-
-    Returns:
-        正規化後的代號字串
-    """
+    """台股純數字自動加 .TW 後綴"""
     stock_code = stock_code.strip().upper()
     if re.match(r"^\d{4,6}$", stock_code):
         return f"{stock_code}.TW"
@@ -46,9 +37,12 @@ def _safe_float(value) -> Optional[float]:
         return None
 
 
-# ─────────────────────────────────────────
-#  公開 API
-# ─────────────────────────────────────────
+def _make_ticker(normalized: str) -> yf.Ticker:
+    """建立 yf.Ticker，帶入 curl_cffi session。"""
+    if _SESSION is not None:
+        return yf.Ticker(normalized, session=_SESSION)
+    return yf.Ticker(normalized)
+
 
 def get_stock_info(stock_code: str) -> dict:
     """
@@ -58,29 +52,15 @@ def get_stock_info(stock_code: str) -> dict:
         stock_code: 股票代號（台股輸入純數字即可，如 "2330"）
 
     Returns:
-        dict 包含以下欄位：
-            - success (bool)
-            - code (str): 正規化代號
-            - name (str): 公司名稱
-            - price (float | None): 目前股價
-            - change (float | None): 今日漲跌點數
-            - change_percent (float | None): 今日漲跌幅 (%)
-            - volume (int | None): 成交量
-            - open (float | None): 開盤價
-            - high (float | None): 今日最高
-            - low (float | None): 今日最低
-            - prev_close (float | None): 昨日收盤
-            - market_cap (int | None): 市值
-            - error (str): 錯誤訊息（success=False 時才有）
+        dict 包含 success, code, name, price, change, change_percent,
+        volume, open, high, low, prev_close, market_cap
     """
     normalized = _normalize_stock_code(stock_code)
     try:
-        ticker = yf.Ticker(normalized)
+        ticker = _make_ticker(normalized)
         info = ticker.info
 
-        # yfinance 有時回傳空 dict
         if not info or info.get("regularMarketPrice") is None:
-            # 嘗試用歷史資料抓最新收盤價
             hist = ticker.history(period="2d")
             if hist.empty:
                 return {
@@ -94,7 +74,6 @@ def get_stock_info(stock_code: str) -> dict:
             prev_close = _safe_float(prev_row["Close"]) if prev_row is not None else None
             change = round(price - prev_close, 2) if price and prev_close else None
             change_pct = round(change / prev_close * 100, 2) if change and prev_close else None
-
             return {
                 "success": True,
                 "code": normalized,
@@ -147,25 +126,16 @@ def get_stock_history(stock_code: str, days: int = 30) -> dict:
     Args:
         stock_code: 股票代號
         days: 取幾天的歷史，預設 30
-
-    Returns:
-        dict 包含：
-            - success (bool)
-            - code (str)
-            - dates (list[str])
-            - closes (list[float])
-            - highs (list[float])
-            - lows (list[float])
-            - volumes (list[int])
-            - avg_price (float | None): 期間平均收盤價
-            - error (str): 失敗時才有
     """
     normalized = _normalize_stock_code(stock_code)
     try:
-        ticker = yf.Ticker(normalized)
+        ticker = _make_ticker(normalized)
         end_date = datetime.now()
-        start_date = end_date - timedelta(days=days + 10)  # 多抓幾天以防假日
-        hist = ticker.history(start=start_date.strftime("%Y-%m-%d"), end=end_date.strftime("%Y-%m-%d"))
+        start_date = end_date - timedelta(days=days + 10)
+        hist = ticker.history(
+            start=start_date.strftime("%Y-%m-%d"),
+            end=end_date.strftime("%Y-%m-%d")
+        )
 
         if hist.empty:
             return {"success": False, "code": normalized, "error": "無歷史資料"}
@@ -196,45 +166,20 @@ def get_stock_history(stock_code: str, days: int = 30) -> dict:
 
 def calculate_fair_value(stock_code: str) -> dict:
     """
-    簡易合理價分析。
-
-    計算邏輯：
-    1. 取得近 30 天和近 60 天的平均收盤價
-    2. 若目前股價低於 30 日均價 5% 以上 → 便宜
-       若高於 30 日均價 5% 以上 → 偏貴
-       否則 → 合理
-
-    Args:
-        stock_code: 股票代號
-
-    Returns:
-        dict 包含：
-            - success (bool)
-            - code (str)
-            - current_price (float | None)
-            - avg_30d (float | None)
-            - avg_60d (float | None)
-            - suggestion (str): "便宜" | "合理" | "偏貴" | "無法判斷"
-            - pe_ratio (float | None)
-            - error (str): 失敗時才有
+    簡易合理價分析（近30天均價比對）。
     """
     normalized = _normalize_stock_code(stock_code)
     try:
-        # 取即時價
         info_data = get_stock_info(stock_code)
         if not info_data.get("success"):
             return {"success": False, "code": normalized, "error": info_data.get("error", "未知錯誤")}
 
         current_price = info_data.get("price")
-
-        # 取 60 天歷史
         hist_60 = get_stock_history(stock_code, days=60)
         hist_30 = get_stock_history(stock_code, days=30)
-
         avg_30d = hist_30.get("avg_price") if hist_30.get("success") else None
         avg_60d = hist_60.get("avg_price") if hist_60.get("success") else None
 
-        # 合理價判斷
         suggestion = "無法判斷"
         if current_price and avg_30d:
             diff_pct = (current_price - avg_30d) / avg_30d * 100
@@ -245,8 +190,7 @@ def calculate_fair_value(stock_code: str) -> dict:
             else:
                 suggestion = "合理"
 
-        # PE ratio
-        ticker = yf.Ticker(normalized)
+        ticker = _make_ticker(normalized)
         pe_ratio = _safe_float(ticker.info.get("trailingPE"))
 
         return {
