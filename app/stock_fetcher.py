@@ -45,6 +45,9 @@ def _get_name(info: dict, normalized: str) -> str:
         code = normalized.replace(".TW", "").replace(".TWO", "")
         name = get_stock_name(code) or normalized
     return name
+
+
+def _make_ticker(normalized: str) -> yf.Ticker:
     """建立 yf.Ticker，帶入 curl_cffi session。"""
     if _SESSION is not None:
         return yf.Ticker(normalized, session=_SESSION)
