@@ -69,7 +69,8 @@ def format_simple_response(stock_info: dict, query_type: str) -> str:
 
     if query_type == "price":
         lines = [
-            f"📈 {name}({code})",
+            f"📈 {name}",
+            f"代號：{code}",
             f"股價：{price_str} 元",
             f"漲跌：{change_str} {pct_str}",
         ]
@@ -90,7 +91,8 @@ def format_simple_response(stock_info: dict, query_type: str) -> str:
         prev_close = stock_info.get("prev_close")
 
         lines = [
-            f"📊 {name}({code}) 買賣參考",
+            f"📊 {name}",
+            f"代號：{code}  買賣參考",
             f"現價：{price_str} 元",
             f"漲跌：{change_str} {pct_str}",
         ]
@@ -242,7 +244,8 @@ def _format_with_history(stock_info: dict, history: dict) -> str:
     pct_str = _format_change_pct(change_pct)
 
     lines = [
-        f"📊 {name}({code}) 買賣參考",
+        f"📊 {name}",
+        f"代號：{code}  買賣參考",
         f"現價：{price_str} 元 {change_str} {pct_str}",
     ]
 

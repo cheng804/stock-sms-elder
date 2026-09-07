@@ -119,7 +119,7 @@ def parse_command(message: str) -> dict:
     # ── 買賣分析 ─────────────────────────
     buy_keywords = ["買", "分析", "要不要", "值不值", "貴不貴", "buy"]
     for kw in buy_keywords:
-        if kw in msg.lower() or kw in msg_no_space.lower():
+        if kw in msg or kw in msg_no_space or kw.lower() in msg.lower():
             stock_code = _extract_stock_code(msg)
             if stock_code:
                 return {

@@ -45,7 +45,7 @@ st.set_page_config(
 #  常數設定
 # ─────────────────────────────────────────
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://stock-sms-elder.onrender.com")
 REFRESH_INTERVAL = 30  # 秒
 
 # 指令類型中文對照
