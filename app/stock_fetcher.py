@@ -39,11 +39,14 @@ def _safe_float(value) -> Optional[float]:
 
 
 def _get_name(info: dict, normalized: str) -> str:
-    """取公司名稱：優先從 yfinance info，其次從離線對應表。"""
-    name = info.get("shortName") or info.get("longName") or ""
-    if not name or name == normalized:
-        code = normalized.replace(".TW", "").replace(".TWO", "")
-        name = get_stock_name(code) or normalized
+    """取公司名稱：優先從離線對應表（中文），其次從 yfinance info（英文）。"""
+    code = normalized.replace(".TW", "").replace(".TWO", "")
+    # 先查離線中文對應表
+    chinese_name = get_stock_name(code)
+    if chinese_name:
+        return chinese_name
+    # 再用 yfinance 的英文名稱
+    name = info.get("shortName") or info.get("longName") or normalized
     return name
 
 
