@@ -20,6 +20,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from typing import Optional
+import asyncio
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -182,13 +183,13 @@ def _handle_unsubscribe(phone: str, stock_code: Optional[str]) -> str:
 #  路由
 # ─────────────────────────────────────────
 
+# 已處理的 idempotency key（防止 textbee retry 重複處理）
+_PROCESSED_KEYS: set = set()
+
 @app.post("/webhook/sms")
 async def webhook_sms(request: Request):
     """
     textbee Webhook 入口：接收使用者簡訊並主動回覆。
-
-    textbee 以 application/json 格式 POST 簡訊內容，
-    本路由解析後根據指令類型呼叫 send_sms() 主動發送回覆。
     須盡快回傳 200，實際處理在背景執行。
     """
     try:
@@ -206,6 +207,17 @@ async def webhook_sms(request: Request):
     if body.get("webhookEvent") != "MESSAGE_RECEIVED":
         return JSONResponse({"ok": True})
 
+    # 去重：同一則簡訊只處理一次
+    idempotency_key = body.get("idempotencyKey", "")
+    if idempotency_key and idempotency_key in _PROCESSED_KEYS:
+        logger.info(f"重複的 webhook，跳過：{idempotency_key}")
+        return JSONResponse({"ok": True})
+    if idempotency_key:
+        _PROCESSED_KEYS.add(idempotency_key)
+        # 避免記憶體無限增長，超過 1000 筆就清空舊的
+        if len(_PROCESSED_KEYS) > 1000:
+            _PROCESSED_KEYS.clear()
+
     try:
         parsed = parse_incoming_webhook(body)
         from_phone = parsed["from_phone"]
@@ -213,6 +225,18 @@ async def webhook_sms(request: Request):
 
         logger.info(f"收到簡訊 from={from_phone}：{message_text!r}")
 
+        # 立刻回傳 200，背景處理（避免 textbee timeout 重試）
+        asyncio.create_task(_process_message(from_phone, message_text))
+
+    except Exception as e:
+        logger.exception(f"解析 Webhook 時發生錯誤：{e}")
+
+    return JSONResponse({"ok": True})
+
+
+async def _process_message(from_phone: str, message_text: str):
+    """背景處理簡訊邏輯"""
+    try:
         # 確保使用者存在
         get_or_create_user(from_phone)
 
@@ -236,7 +260,7 @@ async def webhook_sms(request: Request):
             )
             log_query(from_phone, None, "start", reply)
             send_sms(from_phone, reply)
-            return JSONResponse({"ok": True})
+            return
 
         # 停止指令
         if cmd_type == "stop":
@@ -244,12 +268,13 @@ async def webhook_sms(request: Request):
             reply = "👋 服務已關閉。傳「開始」可以重新啟用。"
             log_query(from_phone, None, "stop", reply)
             send_sms(from_phone, reply)
+            return
             return JSONResponse({"ok": True})
 
         # 未啟用：完全不回應（避免廣告簡訊浪費額度）
         if not is_user_active(from_phone):
             logger.info(f"未啟用用戶 {from_phone} 傳訊息，忽略不回應")
-            return JSONResponse({"ok": True})
+            return
 
         # 根據指令處理
         if cmd_type == "price":
@@ -272,14 +297,11 @@ async def webhook_sms(request: Request):
         # 記錄 log
         log_query(from_phone, stock_code, cmd_type, reply)
 
-        # 主動發送回覆簡訊（textbee 不用 TwiML，直接呼叫 API）
+        # 主動發送回覆簡訊
         send_sms(from_phone, reply)
 
     except Exception as e:
-        logger.exception(f"處理 Webhook 時發生未預期錯誤：{e}")
-
-    # 永遠回傳 200，避免 textbee 重試
-    return JSONResponse({"ok": True})
+        logger.exception(f"處理訊息時發生未預期錯誤：{e}")
 
 
 @app.api_route("/health", methods=["GET", "HEAD"])
