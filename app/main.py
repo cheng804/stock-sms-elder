@@ -282,14 +282,9 @@ async def webhook_sms(request: Request):
     return JSONResponse({"ok": True})
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health_check():
-    """
-    服務健康檢查端點。
-
-    Returns:
-        JSON 包含服務狀態
-    """
+    """服務健康檢查端點。"""
     return JSONResponse({"status": "ok", "service": "stock-sms-elder"})
 
 
