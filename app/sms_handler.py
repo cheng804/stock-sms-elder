@@ -90,6 +90,14 @@ def parse_command(message: str) -> dict:
     if msg_upper in {"說明", "HELP", "？", "?", "菜單", "指令"}:
         return {"type": "help", "stock_code": None, "time": None, "raw": msg}
 
+    # ── 開始/啟動 ─────────────────────────
+    if msg_upper in {"開始", "START", "你好", "HI", "HELLO", "啟動", "開啟"}:
+        return {"type": "start", "stock_code": None, "time": None, "raw": msg}
+
+    # ── 停止 ─────────────────────────────
+    if msg_upper in {"停止", "STOP", "關閉", "暫停"}:
+        return {"type": "stop", "stock_code": None, "time": None, "raw": msg}
+
     # ── 訂閱 ──────────────────────────────
     subscribe_keywords = ["訂閱", "訂购", "subscribe"]
     for kw in subscribe_keywords:

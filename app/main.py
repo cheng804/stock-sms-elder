@@ -34,6 +34,9 @@ from app.twilio_client import parse_incoming_webhook, verify_webhook_signature, 
 TEXTBEE_WEBHOOK_SECRET = os.getenv("TEXTBEE_WEBHOOK_SECRET", "")
 from app.database import (
     get_or_create_user,
+    activate_user,
+    deactivate_user,
+    is_user_active,
     log_query,
     add_subscription,
     remove_subscription,
@@ -218,6 +221,35 @@ async def webhook_sms(request: Request):
         cmd_type = command["type"]
         stock_code = command.get("stock_code")
         notify_time = command.get("time") or "08:30"
+
+        # 開始指令：任何人都可以用，啟用服務
+        if cmd_type == "start":
+            activate_user(from_phone)
+            reply = (
+                "👋 您好！股票查詢服務已開啟！\n\n"
+                "📱 操作方式：\n"
+                "• 傳股票代號查股價（如：2330）\n"
+                "• 代號加「買」做分析（如：2330買）\n"
+                "• 傳「訂閱 2330」每日自動通知\n"
+                "• 傳「說明」看完整指令\n\n"
+                "傳「停止」可關閉服務。"
+            )
+            log_query(from_phone, None, "start", reply)
+            send_sms(from_phone, reply)
+            return JSONResponse({"ok": True})
+
+        # 停止指令
+        if cmd_type == "stop":
+            deactivate_user(from_phone)
+            reply = "👋 服務已關閉。傳「開始」可以重新啟用。"
+            log_query(from_phone, None, "stop", reply)
+            send_sms(from_phone, reply)
+            return JSONResponse({"ok": True})
+
+        # 未啟用：完全不回應（避免廣告簡訊浪費額度）
+        if not is_user_active(from_phone):
+            logger.info(f"未啟用用戶 {from_phone} 傳訊息，忽略不回應")
+            return JSONResponse({"ok": True})
 
         # 根據指令處理
         if cmd_type == "price":

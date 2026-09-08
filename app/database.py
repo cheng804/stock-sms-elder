@@ -39,6 +39,7 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     phone_number = Column(String(20), unique=True, nullable=False, index=True)
+    is_active = Column(Boolean, default=False)  # 需先傳「開始」才啟用
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def __repr__(self) -> str:
@@ -98,24 +99,57 @@ def get_db() -> Session:
 # ─────────────────────────────────────────
 
 def get_or_create_user(phone: str) -> User:
-    """
-    根據手機號碼取得或建立使用者。
-
-    Args:
-        phone: 手機號碼字串
-
-    Returns:
-        User ORM 物件
-    """
+    """根據手機號碼取得或建立使用者。"""
     db = get_db()
     try:
         user = db.query(User).filter(User.phone_number == phone).first()
         if not user:
-            user = User(phone_number=phone)
+            user = User(phone_number=phone, is_active=False)
             db.add(user)
             db.commit()
             db.refresh(user)
         return user
+    finally:
+        db.close()
+
+
+def activate_user(phone: str) -> User:
+    """啟用使用者（傳「開始」後呼叫）。"""
+    db = get_db()
+    try:
+        user = db.query(User).filter(User.phone_number == phone).first()
+        if not user:
+            user = User(phone_number=phone, is_active=True)
+            db.add(user)
+        else:
+            user.is_active = True
+        db.commit()
+        db.refresh(user)
+        return user
+    finally:
+        db.close()
+
+
+def deactivate_user(phone: str) -> bool:
+    """停用使用者（傳「停止」後呼叫）。"""
+    db = get_db()
+    try:
+        user = db.query(User).filter(User.phone_number == phone).first()
+        if user:
+            user.is_active = False
+            db.commit()
+            return True
+        return False
+    finally:
+        db.close()
+
+
+def is_user_active(phone: str) -> bool:
+    """檢查使用者是否已啟用。"""
+    db = get_db()
+    try:
+        user = db.query(User).filter(User.phone_number == phone).first()
+        return user.is_active if user else False
     finally:
         db.close()
 

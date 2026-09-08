@@ -6,12 +6,17 @@ stock_fetcher.py - 股票資料抓取模組
 """
 
 import re
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
 import yfinance as yf
 import pandas as pd
+import requests as req
 from app.stock_name_map import get_stock_name
+
+# 抑制 yfinance 的 WARNING/ERROR log（404、401 等）
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 # 使用 curl_cffi 模擬 Chrome 瀏覽器，避免雲端環境被 Yahoo Finance 封鎖
 try:
@@ -20,13 +25,69 @@ try:
 except ImportError:
     _SESSION = None
 
+# 中文名稱快取（避免重複打 API）
+_NAME_CACHE: dict = {}
+
+
+def _fetch_chinese_name(code: str) -> str:
+    """
+    從 TWSE 即時報價 API 取得中文公司名稱。
+    分別查上市(tse)和上櫃(otc)。
+    """
+    if code in _NAME_CACHE:
+        return _NAME_CACHE[code]
+
+    for prefix in ["tse", "otc"]:
+        try:
+            ex_ch = f"{prefix}_{code}.tw"
+            url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={ex_ch}&json=1&delay=0"
+            r = req.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+            data = r.json()
+            msg_array = data.get("msgArray", [])
+            if msg_array:
+                name = msg_array[0].get("n", "")
+                if name:
+                    _NAME_CACHE[code] = name
+                    return name
+        except Exception:
+            pass
+
+    return ""
+
 
 def _normalize_stock_code(stock_code: str) -> str:
-    """台股純數字自動加 .TW 後綴"""
+    """台股純數字自動加 .TW 後綴（上市），查無資料時會再試 .TWO（上櫃）"""
     stock_code = stock_code.strip().upper()
     if re.match(r"^\d{4,6}$", stock_code):
         return f"{stock_code}.TW"
     return stock_code
+
+
+def _try_get_ticker(normalized: str):
+    """
+    嘗試建立 Ticker，若 .TW 查無資料自動改試 .TWO（上櫃）。
+    回傳 (ticker, normalized_code)
+    """
+    ticker = _make_ticker(normalized)
+    try:
+        hist = ticker.history(period="1d")
+        if not hist.empty:
+            return ticker, normalized
+    except Exception:
+        pass
+
+    # 若是 .TW 結尾，改試 .TWO
+    if normalized.endswith(".TW") and not normalized.endswith(".TWO"):
+        two_code = normalized[:-3] + ".TWO"
+        ticker2 = _make_ticker(two_code)
+        try:
+            hist2 = ticker2.history(period="1d")
+            if not hist2.empty:
+                return ticker2, two_code
+        except Exception:
+            pass
+
+    return ticker, normalized
 
 
 def _safe_float(value) -> Optional[float]:
@@ -39,15 +100,25 @@ def _safe_float(value) -> Optional[float]:
 
 
 def _get_name(info: dict, normalized: str) -> str:
-    """取公司名稱：優先從離線對應表（中文），其次從 yfinance info（英文）。"""
-    code = normalized.replace(".TW", "").replace(".TWO", "")
-    # 先查離線中文對應表
+    """取公司名稱：離線對應表 → 即時爬取中文名 → yfinance 英文名 → 代號"""
+    code = normalized.replace(".TWO", "").replace(".TW", "")
+
+    # 1. 離線對應表（最快）
     chinese_name = get_stock_name(code)
     if chinese_name:
         return chinese_name
-    # 再用 yfinance 的英文名稱
-    name = info.get("shortName") or info.get("longName") or normalized
-    return name
+
+    # 2. 即時爬取中文名
+    fetched_name = _fetch_chinese_name(code)
+    if fetched_name:
+        return fetched_name
+
+    # 3. yfinance 英文名（太長或純英文就用代號）
+    name = info.get("shortName") or info.get("longName") or ""
+    if name and not (len(name) > 12 or name.replace(" ", "").replace(".", "").isascii()):
+        return name
+
+    return code
 
 
 def _make_ticker(normalized: str) -> yf.Ticker:
@@ -70,7 +141,7 @@ def get_stock_info(stock_code: str) -> dict:
     """
     normalized = _normalize_stock_code(stock_code)
     try:
-        ticker = _make_ticker(normalized)
+        ticker, normalized = _try_get_ticker(normalized)
         info = ticker.info
 
         if not info or info.get("regularMarketPrice") is None:
@@ -142,7 +213,7 @@ def get_stock_history(stock_code: str, days: int = 30) -> dict:
     """
     normalized = _normalize_stock_code(stock_code)
     try:
-        ticker = _make_ticker(normalized)
+        ticker, normalized = _try_get_ticker(normalized)
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days + 10)
         hist = ticker.history(
