@@ -70,11 +70,14 @@ def send_subscription_notifications(notify_time: str) -> None:
 
 def _check_and_notify() -> None:
     """
-    每分鐘執行的任務：取得目前時間，呼叫對應的通知函數。
+    每分鐘執行的任務：取得台灣時間，呼叫對應的通知函數。
     """
-    now = datetime.now()
+    # 使用台灣時間（UTC+8）
+    from datetime import timezone, timedelta
+    tw_tz = timezone(timedelta(hours=8))
+    now = datetime.now(tw_tz)
     current_time = f"{now.hour:02d}:{now.minute:02d}"
-    logger.debug(f"[排程] 每分鐘檢查：目前時間 {current_time}")
+    logger.debug(f"[排程] 每分鐘檢查：台灣時間 {current_time}")
     send_subscription_notifications(current_time)
 
 
