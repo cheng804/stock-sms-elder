@@ -171,13 +171,22 @@ def get_stock_info(stock_code: str) -> dict:
                 "low": _safe_float(last_row["Low"]),
                 "prev_close": prev_close,
                 "market_cap": info.get("marketCap"),
+                "is_prev_close": True,  # 標示這是前日收盤價
             }
 
         price = _safe_float(info.get("regularMarketPrice"))
         prev_close = _safe_float(info.get("regularMarketPreviousClose"))
-        change = round(price - prev_close, 2) if price and prev_close else None
+        # 優先用 API 的漲跌，若沒有就自己算
+        change = _safe_float(info.get("regularMarketChange"))
+        if change is None and price and prev_close:
+            change = round(price - prev_close, 2)
+        elif change is not None:
+            change = round(change, 2)
+        # 漲跌幅
         change_pct = _safe_float(info.get("regularMarketChangePercent"))
-        if change_pct is not None:
+        if change_pct is None and change and prev_close:
+            change_pct = round(change / prev_close * 100, 2)
+        elif change_pct is not None:
             change_pct = round(change_pct, 2)
 
         return {

@@ -37,7 +37,6 @@ def handle_message(message: str) -> str:
             "👋 您好！股票查詢服務已開啟！\n\n"
             "📱 操作方式：\n"
             "• 傳股票代號查股價（如：2330）\n"
-            "• 代號加「買」做分析（如：2330買）\n"
             "• 傳「訂閱 2330」每日自動通知\n"
             "• 傳「說明」看完整指令\n\n"
             "傳「停止」可關閉服務。"
@@ -61,7 +60,8 @@ def handle_message(message: str) -> str:
         if not info.get("success"):
             reply = info.get("error", f"😅 查不到 {stock_code}")
         else:
-            reply = generate_elder_friendly_analysis(info, None, "price")
+            history = get_stock_history(stock_code, days=30)
+            reply = generate_elder_friendly_analysis(info, history, "price")
 
     elif cmd_type == "buy_analysis":
         info = get_stock_info(stock_code)
@@ -104,7 +104,6 @@ def main():
     print("-" * 50)
     print("範例指令：")
     print("  2330        查台積電股價")
-    print("  2330買      買賣分析")
     print("  訂閱 2330   每日通知")
     print("  取消 2330   退訂")
     print("  說明        操作說明")

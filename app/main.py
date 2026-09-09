@@ -100,20 +100,12 @@ app.add_middleware(
 # ─────────────────────────────────────────
 
 def _handle_price(stock_code: str, phone: str) -> str:
-    """
-    處理查價指令：抓股票資料 -> AI 分析 -> 回傳文字。
-
-    Args:
-        stock_code: 股票代號
-        phone: 使用者手機號碼
-
-    Returns:
-        要回傳的簡訊內容
-    """
+    """查價 + 順便帶入近30天均價分析"""
     info = get_stock_info(stock_code)
     if not info.get("success"):
         return info.get("error", f"😅 查不到 {stock_code}，請確認代號是否正確。")
-    response = generate_elder_friendly_analysis(info, None, "price")
+    history = get_stock_history(stock_code, days=30)
+    response = generate_elder_friendly_analysis(info, history, "price")
     return response
 
 
@@ -253,7 +245,6 @@ async def _process_message(from_phone: str, message_text: str):
                 "👋 您好！股票查詢服務已開啟！\n\n"
                 "📱 操作方式：\n"
                 "• 傳股票代號查股價（如：2330）\n"
-                "• 代號加「買」做分析（如：2330買）\n"
                 "• 傳「訂閱 2330」每日自動通知\n"
                 "• 傳「說明」看完整指令\n\n"
                 "傳「停止」可關閉服務。"

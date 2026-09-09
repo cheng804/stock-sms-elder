@@ -25,17 +25,17 @@ def _format_change_arrow(change: Optional[float]) -> str:
         return f"▲{change:.2f}"
     if change < 0:
         return f"▼{abs(change):.2f}"
-    return f"－{change:.2f}"
+    return "持平"
 
 
 def _format_change_pct(pct: Optional[float]) -> str:
-    if pct is None:
+    if pct is None or pct == 0:
         return ""
     sign = "+" if pct > 0 else ""
     return f"({sign}{pct:.2f}%)"
 
 
-def format_simple_response(stock_info: dict, query_type: str) -> str:
+def format_simple_response(stock_info: dict, query_type: str, history: Optional[dict] = None) -> str:
     """不依賴 AI，直接格式化成簡訊文字。"""
     if not stock_info.get("success"):
         error_msg = stock_info.get("error", "查詢失敗")
@@ -52,22 +52,49 @@ def format_simple_response(stock_info: dict, query_type: str) -> str:
     pct_str = _format_change_pct(change_pct)
 
     if query_type == "price":
+        is_prev = stock_info.get("is_prev_close", False)
+        prefix = "昨收" if is_prev else "股價"
         lines = [
             f"📈 {name}",
             f"代號：{code}",
-            f"股價：{price_str} 元",
-            f"漲跌：{change_str} {pct_str}",
+            f"{prefix}：{price_str} 元",
         ]
+        if not is_prev:
+            lines.append(f"漲跌：{change_str} {pct_str}")
         high = stock_info.get("high")
         low = stock_info.get("low")
-        if high and low:
+        if high and low and not is_prev:
             lines.append(f"今日區間：{low:.2f}～{high:.2f}")
-        if change and change > 0:
+
+        # 均價分析（直接放在查價結果裡）
+        avg_30d = history.get("avg_price") if history and history.get("success") else None
+        if avg_30d and price:
+            lines.append(f"近30天均價：{avg_30d:.2f} 元")
+            diff_pct = (price - avg_30d) / avg_30d * 100
+            if diff_pct < -5:
+                lines.append("💡 現在比均價便宜，可考慮！")
+            elif diff_pct > 5:
+                lines.append("⚠️ 現在比均價貴，注意風險。")
+            else:
+                lines.append("目前股價在合理範圍。")
+
+        if is_prev:
+            lines.append("（尚未開盤，以上為昨日收盤價）")
+        elif change and change > 0:
             lines.append("今天有漲喔！")
         elif change and change < 0:
             lines.append("今天有跌，別擔心！")
         else:
             lines.append("今天持平。")
+
+        # 非交易時間提示
+        from datetime import datetime, timezone, timedelta
+        tw_now = datetime.now(timezone(timedelta(hours=8)))
+        hour = tw_now.hour
+        weekday = tw_now.weekday()
+        if not is_prev and (weekday >= 5 or not (9 <= hour < 14)):
+            lines.append("（目前非交易時段，以上為最近收盤價）")
+
         return "\n".join(lines)
 
     elif query_type == "buy_analysis":
@@ -133,61 +160,8 @@ def generate_elder_friendly_analysis(
     query_type: str,
 ) -> str:
     """
-    呼叫 OpenAI API，用長輩口吻生成簡短白話分析。
-    若 OPENAI_API_KEY 未設定，自動 fallback。
+    格式化股票資訊，不使用 AI，直接用固定格式輸出。
     """
-    if not OPENAI_API_KEY:
-        if query_type == "buy_analysis" and history and history.get("success"):
-            return _format_with_history(stock_info, history)
-        return format_simple_response(stock_info, query_type)
-
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_API_KEY)
-
-        name = stock_info.get("name", "")
-        code = _clean_code(stock_info.get("code", ""))
-        price = stock_info.get("price", "N/A")
-        change = stock_info.get("change", 0)
-        change_pct = stock_info.get("change_percent", 0)
-        high = stock_info.get("high", "N/A")
-        low = stock_info.get("low", "N/A")
-        avg_30d = history.get("avg_price") if history and history.get("success") else None
-
-        if query_type == "price":
-            prompt = (
-                f"用一句台灣白話說明股票狀況，不超過40字，可加emoji：\n"
-                f"{name}({code}) 現價{price}元，漲跌{change}元({change_pct}%)，"
-                f"今日{low}～{high}"
-            )
-        else:
-            prompt = (
-                f"用兩句台灣白話分析股票貴不貴，不超過60字，最後加「投資有風險」：\n"
-                f"{name}({code}) 現價{price}元，漲跌{change}元({change_pct}%)，"
-                f"近30天均價{avg_30d if avg_30d else '無資料'}元"
-            )
-
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "你是幫台灣長輩看股票的助手，說話簡短親切。"},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=100,
-            temperature=0.7,
-        )
-        ai_text = response.choices[0].message.content.strip()
-
-        # 組合固定資訊 + AI 說明
-        code_clean = _clean_code(stock_info.get("code", ""))
-        price_str = f"{price:.2f}" if isinstance(price, float) else str(price)
-        change_str = _format_change_arrow(stock_info.get("change"))
-        pct_str = _format_change_pct(stock_info.get("change_percent"))
-
-        header = f"📈 {name}（{code_clean}）\n股價：{price_str} 元  {change_str} {pct_str}\n"
-        return header + ai_text
-
-    except Exception:
-        if query_type == "buy_analysis" and history and history.get("success"):
-            return _format_with_history(stock_info, history)
-        return format_simple_response(stock_info, query_type)
+    if query_type == "buy_analysis" and history and history.get("success"):
+        return _format_with_history(stock_info, history)
+    return format_simple_response(stock_info, query_type, history)
