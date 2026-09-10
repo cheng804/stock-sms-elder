@@ -56,9 +56,9 @@ def _fetch_chinese_name(code: str) -> str:
 
 
 def _normalize_stock_code(stock_code: str) -> str:
-    """台股純數字自動加 .TW 後綴（上市），查無資料時會再試 .TWO（上櫃）"""
+    """台股純數字或數字+英文字母（如00991A）自動加 .TW 後綴"""
     stock_code = stock_code.strip().upper()
-    if re.match(r"^\d{4,6}$", stock_code):
+    if re.match(r"^\d{4,6}[A-Z]?$", stock_code):
         return f"{stock_code}.TW"
     return stock_code
 
@@ -119,7 +119,6 @@ def _get_name(info: dict, normalized: str) -> str:
         return name
 
     return code
-
 
 def _make_ticker(normalized: str) -> yf.Ticker:
     """建立 yf.Ticker，帶入 curl_cffi session。"""

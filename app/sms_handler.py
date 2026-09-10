@@ -19,22 +19,17 @@ _TIME_PATTERN = re.compile(r"\b(\d{1,2}:\d{2})\b")
 def _extract_stock_code(text: str) -> Optional[str]:
     """
     從文字中擷取第一個股票代號。
-
-    Args:
-        text: 輸入文字
-
-    Returns:
-        股票代號字串，或 None
+    支援：純數字台股（2330）、數字+英文ETF（00991A）、純英文美股（AAPL）
     """
-    # 先找數字型（台股）：不用 \b，改用 (?<!\d) (?!\d) 避免中文邊界問題
-    match = re.search(r"(?<!\d)(\d{4,6})(?!\d)", text)
+    # 優先找數字開頭（台股/ETF），包含後綴英文字母如 00991A
+    match = re.search(r"(?<!\d)(\d{4,6}[A-Za-z]?)(?!\d)", text)
     if match:
-        return match.group(1)
-    # 再找英文型（美股）
+        return match.group(1).upper()
+    # 再找純英文（美股）
     match = re.search(r"(?<![A-Za-z])([A-Z]{1,5})(?![A-Za-z])", text.upper())
     if match:
         candidate = match.group(1)
-        if candidate not in {"HELP", "SUB", "UNSUB", "BUY"}:
+        if candidate not in {"HELP", "SUB", "UNSUB", "BUY", "START", "STOP"}:
             return candidate
     return None
 
