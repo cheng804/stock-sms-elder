@@ -188,6 +188,21 @@ def get_stock_info(stock_code: str) -> dict:
         elif change_pct is not None:
             change_pct = round(change_pct, 2)
 
+        # Fallback：若 change 還是 None 或 prev_close 是 None，用近5天歷史算漲跌
+        if (change is None or prev_close is None) and price is not None:
+            try:
+                hist_fb = ticker.history(period="5d")
+                if len(hist_fb) >= 2:
+                    today_close = _safe_float(hist_fb.iloc[-1]["Close"])
+                    yesterday_close = _safe_float(hist_fb.iloc[-2]["Close"])
+                    if today_close is not None and yesterday_close is not None and yesterday_close != 0:
+                        change = round(today_close - yesterday_close, 2)
+                        change_pct = round(change / yesterday_close * 100, 2)
+                        if prev_close is None:
+                            prev_close = yesterday_close
+            except Exception:
+                pass
+
         return {
             "success": True,
             "code": normalized,

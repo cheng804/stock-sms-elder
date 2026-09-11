@@ -1,5 +1,5 @@
 """
-twilio_client.py → textbee_client.py（保留原檔名以減少其他檔案改動）
+sms_client.py - textbee SMS 客戶端
 
 使用 textbee 作為 SMS Gateway：
   - 接收簡訊：textbee 將收到的簡訊 POST 到你的 Webhook（JSON 格式）
@@ -121,23 +121,3 @@ def verify_webhook_signature(payload: dict, signature: str) -> bool:
     ).hexdigest()
 
     return hmac.compare_digest(signature or "", expected)
-
-
-# ─────────────────────────────────────────
-#  相容舊介面：build_twiml_response
-#  textbee 不需要 TwiML，直接回 200 即可
-#  保留此函數避免 main.py 改動
-# ─────────────────────────────────────────
-
-def build_twiml_response(message: str) -> str:
-    """
-    textbee 不使用 TwiML，此函數僅為相容介面保留。
-    實際回覆透過 send_sms() 主動發送。
-
-    Args:
-        message: 回覆內容（這裡不使用）
-
-    Returns:
-        空字串
-    """
-    return ""

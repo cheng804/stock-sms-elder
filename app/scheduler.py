@@ -30,7 +30,7 @@ def send_subscription_notifications(notify_time: str) -> None:
     from app.database import get_subscriptions_by_time, log_query
     from app.stock_fetcher import get_stock_info, get_stock_history
     from app.ai_analyzer import generate_elder_friendly_analysis
-    from app.twilio_client import send_sms
+    from app.sms_client import send_sms
 
     subscriptions = get_subscriptions_by_time(notify_time)
 
