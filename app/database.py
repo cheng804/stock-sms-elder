@@ -18,12 +18,29 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./stock_sms.db")
+_RAW_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./stock_sms.db")
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
-)
+# Render 免費 PostgreSQL 提供的 URL 以 "postgres://" 開頭，
+# SQLAlchemy 2.x 只接受 "postgresql://"，需要替換。
+DATABASE_URL = _RAW_DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+_is_sqlite = DATABASE_URL.startswith("sqlite")
+
+if _is_sqlite:
+    # SQLite：單執行緒保護
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False},
+    )
+else:
+    # PostgreSQL：啟用連線池，避免 Render 免費方案閒置斷線
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,      # 每次取用連線前先 ping，自動重連
+        pool_recycle=300,        # 5 分鐘回收閒置連線，防止 server 端踢掉
+        pool_size=5,
+        max_overflow=10,
+    )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -437,5 +454,216 @@ def get_recent_logs(limit: int = 50) -> List[dict]:
             }
             for log in logs
         ]
+    finally:
+        db.close()
+
+
+# ─────────────────────────────────────────
+#  個人化分析用查詢函數
+# ─────────────────────────────────────────
+
+def get_user_query_history(phone: str, limit: int = 100) -> List[dict]:
+    """
+    取得指定使用者的查詢歷史（最近 N 筆）。
+
+    Args:
+        phone: 使用者手機號碼
+        limit: 回傳筆數，預設 100
+
+    Returns:
+        [{"stock_code", "command_type", "created_at"}, ...]
+    """
+    db = get_db()
+    try:
+        logs = (
+            db.query(QueryLog)
+            .filter(
+                QueryLog.phone_number == phone,
+                QueryLog.stock_code.isnot(None),
+            )
+            .order_by(QueryLog.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "stock_code": log.stock_code,
+                "command_type": log.command_type,
+                "created_at": log.created_at,
+            }
+            for log in logs
+        ]
+    finally:
+        db.close()
+
+
+def get_user_favorite_stocks(phone: str, top_n: int = 3) -> List[dict]:
+    """
+    取得使用者最常查詢的前 N 支股票。
+
+    Args:
+        phone: 使用者手機號碼
+        top_n: 回傳筆數，預設 3
+
+    Returns:
+        [{"stock_code": str, "count": int, "last_queried": datetime}, ...]
+        依查詢次數由多到少排列
+    """
+    db = get_db()
+    try:
+        results = (
+            db.query(
+                QueryLog.stock_code,
+                func.count(QueryLog.id).label("count"),
+                func.max(QueryLog.created_at).label("last_queried"),
+            )
+            .filter(
+                QueryLog.phone_number == phone,
+                QueryLog.stock_code.isnot(None),
+            )
+            .group_by(QueryLog.stock_code)
+            .order_by(func.count(QueryLog.id).desc())
+            .limit(top_n)
+            .all()
+        )
+        return [
+            {
+                "stock_code": r.stock_code,
+                "count": r.count,
+                "last_queried": r.last_queried,
+            }
+            for r in results
+        ]
+    finally:
+        db.close()
+
+
+def get_user_query_today_count(phone: str) -> int:
+    """
+    取得指定使用者今日查詢次數（含所有指令類型）。
+
+    Args:
+        phone: 使用者手機號碼
+
+    Returns:
+        今日查詢次數
+    """
+    db = get_db()
+    try:
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        return (
+            db.query(func.count(QueryLog.id))
+            .filter(
+                QueryLog.phone_number == phone,
+                QueryLog.created_at >= today_start,
+            )
+            .scalar()
+            or 0
+        )
+    finally:
+        db.close()
+
+
+def get_user_last_query(phone: str, stock_code: str) -> Optional[dict]:
+    """
+    取得使用者上一次查詢特定股票的紀錄。
+
+    Args:
+        phone: 使用者手機號碼
+        stock_code: 股票代號（含 .TW 後綴）
+
+    Returns:
+        {"stock_code", "command_type", "created_at"} 或 None
+    """
+    db = get_db()
+    try:
+        # 比對時去掉 .TW/.TWO 後綴，讓 2330 和 2330.TW 都能找到
+        clean = stock_code.replace(".TWO", "").replace(".TW", "")
+        log = (
+            db.query(QueryLog)
+            .filter(
+                QueryLog.phone_number == phone,
+                QueryLog.stock_code.ilike(f"{clean}%"),
+            )
+            .order_by(QueryLog.created_at.desc())
+            .first()
+        )
+        if not log:
+            return None
+        return {
+            "stock_code": log.stock_code,
+            "command_type": log.command_type,
+            "created_at": log.created_at,
+        }
+    finally:
+        db.close()
+
+
+def get_user_subscriptions(phone: str) -> List[Subscription]:
+    """
+    取得指定使用者的所有啟用訂閱。
+
+    Args:
+        phone: 使用者手機號碼
+
+    Returns:
+        Subscription 物件列表
+    """
+    db = get_db()
+    try:
+        return (
+            db.query(Subscription)
+            .filter(
+                Subscription.phone_number == phone,
+                Subscription.is_active == True,
+            )
+            .all()
+        )
+    finally:
+        db.close()
+
+
+def get_all_users_with_activity() -> List[dict]:
+    """
+    取得所有使用者及其活動摘要（供 Dashboard 個人分析頁用）。
+
+    Returns:
+        [{"phone_number", "is_active", "created_at",
+          "total_queries", "last_query_at", "favorite_stock"}, ...]
+    """
+    db = get_db()
+    try:
+        users = db.query(User).all()
+        result = []
+        for user in users:
+            # 計算總查詢次數與最後查詢時間
+            stats = (
+                db.query(
+                    func.count(QueryLog.id).label("total"),
+                    func.max(QueryLog.created_at).label("last_at"),
+                )
+                .filter(QueryLog.phone_number == user.phone_number)
+                .first()
+            )
+            # 找最常查的股票
+            top = (
+                db.query(QueryLog.stock_code, func.count(QueryLog.id).label("cnt"))
+                .filter(
+                    QueryLog.phone_number == user.phone_number,
+                    QueryLog.stock_code.isnot(None),
+                )
+                .group_by(QueryLog.stock_code)
+                .order_by(func.count(QueryLog.id).desc())
+                .first()
+            )
+            result.append({
+                "phone_number": user.phone_number,
+                "is_active": user.is_active,
+                "created_at": user.created_at,
+                "total_queries": stats.total if stats else 0,
+                "last_query_at": stats.last_at if stats else None,
+                "favorite_stock": top.stock_code if top else None,
+            })
+        return result
     finally:
         db.close()

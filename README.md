@@ -145,6 +145,39 @@ OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   # 選填
 
 ---
 
+### 資料庫設定
+
+#### 本機開發（預設）
+
+預設使用 SQLite，不需額外設定，啟動後自動產生 `stock_sms.db`。
+
+#### 正式部署（Render）— 建議使用 PostgreSQL
+
+Render 的免費方案檔案系統是暫時性的，每次 redeploy 都會重置，SQLite 資料會消失。
+建議建立 Render 免費 PostgreSQL 資料庫來持久化所有查詢紀錄與訂閱。
+
+**建立步驟：**
+
+1. 登入 [Render Dashboard](https://dashboard.render.com)
+2. 點擊「New +」→「PostgreSQL」
+3. 填入名稱（如 `stock-sms-db`），Region 選 **Oregon (US West)**，Plan 選 **Free**
+4. 點擊「Create Database」，等待約 1 分鐘
+5. 建立完成後，進入資料庫頁面，找到 **「Internal Database URL」**（僅供同一 Render 帳號下的服務使用，速度較快）
+6. 複製該 URL，格式類似：
+   ```
+   postgresql://stock_sms_user:xxxx@dpg-xxxx.oregon-postgres.render.com/stock_sms
+   ```
+7. 前往你的 **Web Service** → 「Environment」→ 新增環境變數：
+   ```
+   DATABASE_URL = （貼上上方複製的 Internal Database URL）
+   ```
+8. 重新 Deploy，系統啟動時會自動建立所有資料表。
+
+> **注意：** Render 免費 PostgreSQL 會在 **90 天無活動後自動刪除**。  
+> 只要服務有持續使用（收發簡訊），就不會觸發刪除。
+
+---
+
 ## ▶️ 啟動方式
 
 ### 啟動 FastAPI 服務

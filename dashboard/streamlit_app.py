@@ -126,6 +126,72 @@ def load_logs(limit: int = 50) -> list:
         return []
 
 
+@st.cache_data(ttl=30)
+def load_user_activity() -> list:
+    """
+    載入所有使用者活動摘要（個人分析頁用）。
+
+    Returns:
+        使用者活動摘要列表
+    """
+    try:
+        from app.database import get_all_users_with_activity
+        rows = get_all_users_with_activity()
+        result = []
+        for r in rows:
+            last_at = r.get("last_query_at")
+            created = r.get("created_at")
+            result.append({
+                "手機後4碼": f"****{r['phone_number'][-4:]}" if r["phone_number"] and len(r["phone_number"]) >= 4 else r["phone_number"],
+                "狀態": "✅ 啟用" if r["is_active"] else "⛔ 停用",
+                "最愛股票": r.get("favorite_stock") or "—",
+                "總查詢次數": r.get("total_queries", 0),
+                "最後查詢": last_at.strftime("%Y-%m-%d %H:%M") if last_at else "—",
+                "加入日期": created.strftime("%Y-%m-%d") if created else "—",
+                "_phone": r["phone_number"],
+            })
+        return result
+    except Exception as e:
+        st.error(f"無法載入使用者活動：{e}")
+        return []
+
+
+@st.cache_data(ttl=30)
+def load_user_favorites(phone: str) -> list:
+    """
+    載入特定使用者的關注股池。
+
+    Args:
+        phone: 手機號碼
+
+    Returns:
+        [{"stock_code", "count", "last_queried"}, ...]
+    """
+    try:
+        from app.database import get_user_favorite_stocks
+        return get_user_favorite_stocks(phone, top_n=10)
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=30)
+def load_user_recent_logs(phone: str) -> list:
+    """
+    載入特定使用者最近 20 筆查詢紀錄。
+
+    Args:
+        phone: 手機號碼
+
+    Returns:
+        查詢紀錄列表
+    """
+    try:
+        from app.database import get_user_query_history
+        return get_user_query_history(phone, limit=20)
+    except Exception:
+        return []
+
+
 @st.cache_data(ttl=10)
 def load_subscriptions() -> list:
     """
@@ -382,6 +448,137 @@ if subs:
     st.caption(f"共 {len(subs)} 筆啟用訂閱")
 else:
     st.info("目前沒有啟用中的訂閱")
+
+st.divider()
+
+# ─────────────────────────────────────────
+#  個人化分析
+# ─────────────────────────────────────────
+
+st.subheader("👤 使用者個人分析")
+
+user_activity = load_user_activity()
+
+if not user_activity:
+    st.info("目前尚無使用者資料")
+else:
+    # ── 總覽表格 ──────────────────────────
+    df_users = pd.DataFrame(user_activity)
+    display_cols = ["手機後4碼", "狀態", "最愛股票", "總查詢次數", "最後查詢", "加入日期"]
+    st.dataframe(
+        df_users[display_cols],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.divider()
+
+    # ── 個別使用者深入分析 ────────────────
+    st.markdown("**🔍 個別使用者深入分析**")
+
+    # 下拉選單：只顯示後4碼，但存完整號碼
+    phone_options = {
+        row["手機後4碼"]: row["_phone"]
+        for row in user_activity
+    }
+    selected_label = st.selectbox(
+        "選擇使用者",
+        options=list(phone_options.keys()),
+        index=0,
+    )
+    selected_phone = phone_options[selected_label]
+
+    col_left, col_right = st.columns(2)
+
+    # ── 左欄：關注股池長條圖 ──────────────
+    with col_left:
+        st.markdown("**關注股池（查詢次數）**")
+        favorites = load_user_favorites(selected_phone)
+
+        if favorites:
+            df_fav = pd.DataFrame(favorites)
+            # 移除 .TW/.TWO 後綴讓圖表更簡潔
+            df_fav["stock_code"] = df_fav["stock_code"].str.replace(
+                r"\.(TW|TWO)$", "", regex=True
+            )
+            df_fav = df_fav.rename(columns={"stock_code": "股票代號", "count": "查詢次數"})
+            df_fav = df_fav.sort_values("查詢次數", ascending=True)
+
+            fig_fav = px.bar(
+                df_fav,
+                x="查詢次數",
+                y="股票代號",
+                orientation="h",
+                color="查詢次數",
+                color_continuous_scale="Teal",
+                text="查詢次數",
+                height=max(200, len(df_fav) * 45),
+            )
+            fig_fav.update_traces(textposition="outside")
+            fig_fav.update_layout(
+                showlegend=False,
+                coloraxis_showscale=False,
+                margin=dict(l=10, r=20, t=10, b=10),
+                xaxis_title="查詢次數",
+                yaxis_title="",
+            )
+            st.plotly_chart(fig_fav, use_container_width=True)
+        else:
+            st.info("此使用者尚無股票查詢紀錄")
+
+    # ── 右欄：最近查詢時間軸 ──────────────
+    with col_right:
+        st.markdown("**最近查詢紀錄**")
+        recent = load_user_recent_logs(selected_phone)
+
+        if recent:
+            cmd_labels = {
+                "price": "查股價",
+                "buy_analysis": "買賣分析",
+                "subscribe": "訂閱",
+                "unsubscribe": "退訂",
+                "help": "說明",
+                "unknown": "未知",
+            }
+            df_recent = pd.DataFrame(recent)
+            df_recent["股票代號"] = df_recent["stock_code"].str.replace(
+                r"\.(TW|TWO)$", "", regex=True
+            )
+            df_recent["指令"] = df_recent["command_type"].map(
+                lambda x: cmd_labels.get(x, x)
+            )
+            df_recent["時間"] = pd.to_datetime(df_recent["created_at"]).dt.strftime(
+                "%m/%d %H:%M"
+            )
+            st.dataframe(
+                df_recent[["時間", "股票代號", "指令"]],
+                use_container_width=True,
+                hide_index=True,
+                height=300,
+            )
+        else:
+            st.info("此使用者尚無查詢紀錄")
+
+    # ── 行為指標卡片 ──────────────────────
+    st.markdown("**行為指標**")
+    selected_row = next(r for r in user_activity if r["_phone"] == selected_phone)
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.metric("總查詢次數", selected_row["總查詢次數"])
+    with m2:
+        st.metric("最愛股票", selected_row["最愛股票"])
+    with m3:
+        fav_count = len(favorites) if favorites else 0
+        st.metric("關注股票數", fav_count)
+    with m4:
+        # 計算今日查詢次數
+        try:
+            from app.database import get_user_query_today_count
+            today_cnt = get_user_query_today_count(selected_phone)
+        except Exception:
+            today_cnt = "—"
+        st.metric("今日查詢次數", today_cnt)
 
 # ─────────────────────────────────────────
 #  自動重新整理

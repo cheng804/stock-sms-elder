@@ -31,6 +31,7 @@ from app.sms_handler import parse_command, get_help_message
 from app.stock_fetcher import get_stock_info, get_stock_history, calculate_fair_value
 from app.ai_analyzer import generate_elder_friendly_analysis, format_simple_response
 from app.sms_client import parse_incoming_webhook, verify_webhook_signature, send_sms
+from app.personal_advisor import get_personal_advice
 
 TEXTBEE_WEBHOOK_SECRET = os.getenv("TEXTBEE_WEBHOOK_SECRET", "")
 from app.database import (
@@ -100,18 +101,24 @@ app.add_middleware(
 # ─────────────────────────────────────────
 
 def _handle_price(stock_code: str, phone: str) -> str:
-    """查價 + 順便帶入近30天均價分析"""
+    """查價 + 近30天均價分析 + 個人化建議"""
     info = get_stock_info(stock_code)
     if not info.get("success"):
         return info.get("error", f"😅 查不到 {stock_code}，請確認代號是否正確。")
     history = get_stock_history(stock_code, days=30)
     response = generate_elder_friendly_analysis(info, history, "price")
+
+    # 附加個人化建議（新用戶或無歷史時回傳空字串，不影響主回覆）
+    advice = get_personal_advice(phone, stock_code, current_price=info.get("price"))
+    if advice:
+        response = f"{response}\n\n{advice}"
+
     return response
 
 
 def _handle_buy_analysis(stock_code: str, phone: str) -> str:
     """
-    處理買賣分析指令：抓股票資料 + 歷史 -> AI 分析 -> 回傳文字。
+    處理買賣分析指令：抓股票資料 + 歷史 -> 分析 -> 個人化建議 -> 回傳文字。
 
     Args:
         stock_code: 股票代號
@@ -125,6 +132,12 @@ def _handle_buy_analysis(stock_code: str, phone: str) -> str:
         return info.get("error", f"😅 查不到 {stock_code}，請確認代號是否正確。")
     history = get_stock_history(stock_code, days=30)
     response = generate_elder_friendly_analysis(info, history, "buy_analysis")
+
+    # 附加個人化建議
+    advice = get_personal_advice(phone, stock_code, current_price=info.get("price"))
+    if advice:
+        response = f"{response}\n\n{advice}"
+
     return response
 
 
