@@ -19,6 +19,59 @@ logger = logging.getLogger(__name__)
 #  通知發送邏輯
 # ─────────────────────────────────────────
 
+def check_price_alerts() -> None:
+    """
+    檢查所有啟用中的價格警報，股價觸及目標價時發送簡訊通知。
+    每天 08:30 由排程器呼叫一次。
+    """
+    from app.database import get_active_alerts, trigger_alert, log_query
+    from app.stock_fetcher import get_stock_info
+    from app.sms_client import send_sms
+
+    alerts = get_active_alerts()
+    if not alerts:
+        logger.debug("[警報] 目前沒有啟用中的警報。")
+        return
+
+    logger.info(f"[警報] 開始檢查 {len(alerts)} 筆警報。")
+
+    for alert in alerts:
+        phone = alert.phone_number
+        stock_code = alert.stock_code
+        target = float(alert.target_price)
+        direction = alert.direction
+        clean = stock_code.replace(".TWO", "").replace(".TW", "")
+
+        try:
+            info = get_stock_info(stock_code)
+            if not info.get("success"):
+                continue
+
+            price = info.get("price")
+            if price is None:
+                continue
+
+            triggered = (
+                (direction == "below" and price <= target) or
+                (direction == "above" and price >= target)
+            )
+
+            if triggered:
+                dir_text = f"跌破 {target:.0f}" if direction == "below" else f"突破 {target:.0f}"
+                reply = (
+                    f"🔔 到價警報！\n"
+                    f"{clean} 現價 {price:.2f} 元，已{dir_text} 元！\n"
+                    f"傳「{clean}買」可查看完整分析。"
+                )
+                send_sms(phone, reply)
+                trigger_alert(alert.id)
+                log_query(phone, stock_code, "alert_triggered", reply)
+                logger.info(f"[警報] 觸發：{phone} -> {clean} {dir_text}")
+
+        except Exception as e:
+            logger.error(f"[警報] 處理警報 {phone}/{stock_code} 時發生錯誤：{e}")
+
+
 def send_subscription_notifications(notify_time: str) -> None:
     """
     查詢指定通知時間的所有啟用訂閱，發送股票資訊給每位訂閱者。
@@ -72,13 +125,15 @@ def _check_and_notify() -> None:
     """
     每分鐘執行的任務：取得台灣時間，呼叫對應的通知函數。
     """
-    # 使用台灣時間（UTC+8）
     from datetime import timezone, timedelta
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz)
     current_time = f"{now.hour:02d}:{now.minute:02d}"
     logger.debug(f"[排程] 每分鐘檢查：台灣時間 {current_time}")
     send_subscription_notifications(current_time)
+    # 每天 08:30 執行警報檢查
+    if current_time == "08:30":
+        check_price_alerts()
 
 
 # ─────────────────────────────────────────

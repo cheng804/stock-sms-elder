@@ -115,8 +115,8 @@ def format_simple_response(stock_info: dict, query_type: str, history: Optional[
         return f"📈 {name}（{code}）\n股價：{price_str} 元  漲跌：{change_str} {pct_str}"
 
 
-def _format_with_history(stock_info: dict, history: dict) -> str:
-    """結合歷史資料的買賣分析（不使用 AI）。"""
+def _format_with_history(stock_info: dict, history: dict, rsi_data: Optional[dict] = None) -> str:
+    """結合歷史資料的買賣分析（不使用 AI），加入 RSI 解讀。"""
     name = stock_info.get("name", stock_info.get("code", ""))
     code = _clean_code(stock_info.get("code", ""))
     price = stock_info.get("price")
@@ -145,6 +145,18 @@ def _format_with_history(stock_info: dict, history: dict) -> str:
     else:
         lines.append("無法取得均價資料。")
 
+    # RSI 解讀
+    if rsi_data and rsi_data.get("success"):
+        signal = rsi_data.get("signal", "")
+        rsi_val = rsi_data.get("rsi")
+        signal_emoji = {
+            "超賣": "🟢", "偏弱": "🔵", "中性": "⚪",
+            "偏強": "🟡", "超買": "🔴"
+        }.get(signal, "")
+        if rsi_val is not None:
+            lines.append(f"{signal_emoji} RSI {rsi_val}（{signal}）")
+            lines.append(rsi_data.get("description", ""))
+
     lines.append("投資有風險，請謹慎！")
     return "\n".join(lines)
 
@@ -153,10 +165,12 @@ def generate_elder_friendly_analysis(
     stock_info: dict,
     history: Optional[dict],
     query_type: str,
+    rsi_data: Optional[dict] = None,
 ) -> str:
     """
-    格式化股票資訊，不使用 AI，直接用固定格式輸出。
+    格式化股票資訊，直接用固定格式輸出。
+    buy_analysis 時帶入 rsi_data 可顯示 RSI 解讀。
     """
     if query_type == "buy_analysis" and history and history.get("success"):
-        return _format_with_history(stock_info, history)
+        return _format_with_history(stock_info, history, rsi_data)
     return format_simple_response(stock_info, query_type, history)

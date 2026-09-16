@@ -93,6 +93,24 @@ class Subscription(Base):
         return f"<Subscription phone={self.phone_number} code={self.stock_code} time={self.notify_time}>"
 
 
+class PriceAlert(Base):
+    """價格警報資料表：記錄使用者設定的股票到價提醒。"""
+    __tablename__ = "price_alerts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    phone_number = Column(String(20), nullable=False, index=True)
+    stock_code = Column(String(20), nullable=False)
+    target_price = Column(String(20), nullable=False)   # 儲存為字串，避免浮點精度問題
+    direction = Column(String(5), nullable=False)        # "below"（跌破）或 "above"（突破）
+    is_active = Column(Boolean, default=True)
+    triggered_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return (f"<PriceAlert phone={self.phone_number} code={self.stock_code} "
+                f"target={self.target_price} dir={self.direction}>")
+
+
 # 建立所有資料表
 Base.metadata.create_all(bind=engine)
 
@@ -665,5 +683,141 @@ def get_all_users_with_activity() -> List[dict]:
                 "favorite_stock": top.stock_code if top else None,
             })
         return result
+    finally:
+        db.close()
+
+
+# ─────────────────────────────────────────
+#  價格警報 CRUD
+# ─────────────────────────────────────────
+
+def add_alert(phone: str, stock_code: str, target_price: float, direction: str) -> PriceAlert:
+    """
+    新增或覆蓋一筆價格警報。
+    同一 (phone, stock_code) 若已有啟用中的警報，更新目標價與方向。
+
+    Args:
+        phone:        使用者手機號碼
+        stock_code:   股票代號
+        target_price: 目標價格
+        direction:    "below"（跌破通知）或 "above"（突破通知）
+
+    Returns:
+        PriceAlert ORM 物件
+    """
+    db = get_db()
+    try:
+        alert = (
+            db.query(PriceAlert)
+            .filter(
+                PriceAlert.phone_number == phone,
+                PriceAlert.stock_code == stock_code,
+                PriceAlert.is_active == True,
+            )
+            .first()
+        )
+        if alert:
+            alert.target_price = str(target_price)
+            alert.direction = direction
+            alert.triggered_at = None
+        else:
+            alert = PriceAlert(
+                phone_number=phone,
+                stock_code=stock_code,
+                target_price=str(target_price),
+                direction=direction,
+                is_active=True,
+            )
+            db.add(alert)
+        db.commit()
+        db.refresh(alert)
+        return alert
+    finally:
+        db.close()
+
+
+def remove_alert(phone: str, stock_code: str) -> bool:
+    """
+    取消指定使用者對某支股票的價格警報（設為 inactive）。
+
+    Returns:
+        True 表示找到並停用，False 表示找不到
+    """
+    db = get_db()
+    try:
+        alert = (
+            db.query(PriceAlert)
+            .filter(
+                PriceAlert.phone_number == phone,
+                PriceAlert.stock_code == stock_code,
+                PriceAlert.is_active == True,
+            )
+            .first()
+        )
+        if alert:
+            alert.is_active = False
+            db.commit()
+            return True
+        return False
+    finally:
+        db.close()
+
+
+def get_active_alerts() -> List[PriceAlert]:
+    """取得所有啟用中的價格警報。"""
+    db = get_db()
+    try:
+        return db.query(PriceAlert).filter(PriceAlert.is_active == True).all()
+    finally:
+        db.close()
+
+
+def trigger_alert(alert_id: int) -> bool:
+    """
+    標記警報為已觸發（設 triggered_at 並停用）。
+
+    Args:
+        alert_id: PriceAlert 的 id
+
+    Returns:
+        True 表示成功
+    """
+    db = get_db()
+    try:
+        alert = db.query(PriceAlert).filter(PriceAlert.id == alert_id).first()
+        if alert:
+            alert.triggered_at = datetime.utcnow()
+            alert.is_active = False
+            db.commit()
+            return True
+        return False
+    finally:
+        db.close()
+
+
+def get_all_alerts_for_dashboard() -> List[dict]:
+    """
+    取得所有警報（含已觸發），供 Dashboard 顯示。
+
+    Returns:
+        [{"id", "phone_number", "stock_code", "target_price",
+          "direction", "is_active", "triggered_at", "created_at"}, ...]
+    """
+    db = get_db()
+    try:
+        alerts = db.query(PriceAlert).order_by(PriceAlert.created_at.desc()).all()
+        return [
+            {
+                "id": a.id,
+                "phone_number": a.phone_number,
+                "stock_code": a.stock_code,
+                "target_price": float(a.target_price),
+                "direction": a.direction,
+                "is_active": a.is_active,
+                "triggered_at": a.triggered_at.strftime("%Y-%m-%d %H:%M") if a.triggered_at else "—",
+                "created_at": a.created_at.strftime("%Y-%m-%d %H:%M") if a.created_at else "—",
+            }
+            for a in alerts
+        ]
     finally:
         db.close()

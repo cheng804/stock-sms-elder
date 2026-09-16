@@ -316,3 +316,74 @@ def calculate_fair_value(stock_code: str) -> dict:
             "code": normalized,
             "error": f"合理價分析失敗：{str(e)}",
         }
+
+
+def calculate_rsi(stock_code: str, period: int = 14) -> dict:
+    """
+    計算股票的 RSI（相對強弱指標）。
+
+    RSI 使用近 period+20 天的收盤價計算，回傳最新一日的 RSI 值。
+
+    Args:
+        stock_code: 股票代號
+        period:     RSI 週期，預設 14 日
+
+    Returns:
+        dict 包含:
+            success (bool)
+            rsi (float | None): 最新 RSI 值，0~100
+            signal (str): "超賣" | "偏弱" | "中性" | "偏強" | "超買"
+            description (str): 長輩友善的說明文字
+    """
+    normalized = _normalize_stock_code(stock_code)
+    try:
+        ticker, normalized = _try_get_ticker(normalized)
+        hist = ticker.history(period=f"{period + 30}d")
+
+        if hist.empty or len(hist) < period + 1:
+            return {"success": False, "rsi": None,
+                    "signal": "無資料", "description": "歷史資料不足，無法計算 RSI。"}
+
+        closes = hist["Close"].dropna()
+        delta = closes.diff()
+
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+
+        avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()
+        avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
+
+        rs = avg_gain / avg_loss.replace(0, float("inf"))
+        rsi_series = 100 - (100 / (1 + rs))
+        rsi_val = round(float(rsi_series.iloc[-1]), 1)
+
+        if rsi_val < 30:
+            signal = "超賣"
+            description = f"RSI {rsi_val}，目前嚴重超賣，股價可能已到低點，可以留意買入機會，但仍需謹慎。"
+        elif rsi_val < 45:
+            signal = "偏弱"
+            description = f"RSI {rsi_val}，目前偏弱，賣壓較大，建議觀望為主。"
+        elif rsi_val < 55:
+            signal = "中性"
+            description = f"RSI {rsi_val}，目前多空均衡，沒有明顯方向。"
+        elif rsi_val < 70:
+            signal = "偏強"
+            description = f"RSI {rsi_val}，目前偏強，股價動能不錯，但注意追高風險。"
+        else:
+            signal = "超買"
+            description = f"RSI {rsi_val}，目前嚴重超買，股價可能偏高，不建議此時追入。"
+
+        return {
+            "success": True,
+            "rsi": rsi_val,
+            "signal": signal,
+            "description": description,
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "rsi": None,
+            "signal": "錯誤",
+            "description": f"RSI 計算失敗：{e}",
+        }

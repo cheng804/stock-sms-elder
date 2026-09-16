@@ -28,7 +28,7 @@ from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
 from app.sms_handler import parse_command, get_help_message
-from app.stock_fetcher import get_stock_info, get_stock_history, calculate_fair_value
+from app.stock_fetcher import get_stock_info, get_stock_history, calculate_fair_value, calculate_rsi
 from app.response_formatter import generate_elder_friendly_analysis, format_simple_response
 from app.sms_client import parse_incoming_webhook, verify_webhook_signature, send_sms
 from app.personal_advisor import get_personal_advice
@@ -49,6 +49,9 @@ from app.database import (
     get_top_queried_stocks,
     get_command_type_distribution,
     get_recent_logs,
+    add_alert,
+    remove_alert,
+    get_active_alerts,
 )
 from app.scheduler import start_scheduler
 
@@ -118,20 +121,14 @@ def _handle_price(stock_code: str, phone: str) -> str:
 
 def _handle_buy_analysis(stock_code: str, phone: str) -> str:
     """
-    處理買賣分析指令：抓股票資料 + 歷史 -> 分析 -> 個人化建議 -> 回傳文字。
-
-    Args:
-        stock_code: 股票代號
-        phone: 使用者手機號碼
-
-    Returns:
-        要回傳的簡訊內容
+    處理買賣分析指令：抓股票資料 + 歷史 + RSI -> 分析 -> 個人化建議 -> 回傳文字。
     """
     info = get_stock_info(stock_code)
     if not info.get("success"):
         return info.get("error", f"😅 查不到 {stock_code}，請確認代號是否正確。")
     history = get_stock_history(stock_code, days=30)
-    response = generate_elder_friendly_analysis(info, history, "buy_analysis")
+    rsi_data = calculate_rsi(stock_code)
+    response = generate_elder_friendly_analysis(info, history, "buy_analysis", rsi_data)
 
     # 附加個人化建議
     advice = get_personal_advice(phone, stock_code, current_price=info.get("price"))
@@ -167,13 +164,6 @@ def _handle_subscribe(phone: str, stock_code: Optional[str], notify_time: str) -
 def _handle_unsubscribe(phone: str, stock_code: Optional[str]) -> str:
     """
     處理退訂指令：更新資料庫 -> 回傳確認訊息。
-
-    Args:
-        phone: 使用者手機號碼
-        stock_code: 股票代號
-
-    Returns:
-        確認訊息
     """
     if not stock_code:
         return "😅 請告訴我您要取消的股票代號，例如：取消 2330"
@@ -182,6 +172,41 @@ def _handle_unsubscribe(phone: str, stock_code: Optional[str]) -> str:
         return f"✅ 已取消 {stock_code} 的訂閱，不再傳通知給您。"
     else:
         return f"😅 找不到您訂閱 {stock_code} 的紀錄，可能已經取消了。"
+
+
+def _handle_set_alert(phone: str, stock_code: Optional[str],
+                      target_price: Optional[float], direction: str) -> str:
+    """設定到價警報"""
+    if not stock_code:
+        return "😅 請告訴我要監控的股票代號，例如：警報 2330 750"
+    if target_price is None:
+        return "😅 請告訴我目標價格，例如：警報 2330 750"
+    from app.stock_fetcher import _normalize_stock_code
+    normalized = _normalize_stock_code(stock_code)
+    clean = stock_code.replace(".TWO", "").replace(".TW", "")
+    add_alert(phone, normalized, target_price, direction)
+    dir_text = f"突破 {target_price:.0f}" if direction == "above" else f"跌破 {target_price:.0f}"
+    return (
+        f"🔔 警報設定成功！\n"
+        f"股票：{clean}\n"
+        f"條件：{dir_text} 元時通知您\n"
+        f"系統每天早上 08:30 自動檢查。\n"
+        f"傳「取消警報 {clean}」可刪除。"
+    )
+
+
+def _handle_remove_alert(phone: str, stock_code: Optional[str]) -> str:
+    """取消價格警報"""
+    if not stock_code:
+        return "😅 請告訴我要取消警報的股票代號，例如：取消警報 2330"
+    from app.stock_fetcher import _normalize_stock_code
+    normalized = _normalize_stock_code(stock_code)
+    success = remove_alert(phone, normalized)
+    clean = stock_code.replace(".TWO", "").replace(".TW", "")
+    if success:
+        return f"✅ 已取消 {clean} 的價格警報。"
+    else:
+        return f"😅 找不到 {clean} 的警報紀錄，可能已經取消了。"
 
 
 # ─────────────────────────────────────────
@@ -289,6 +314,12 @@ async def _process_message(from_phone: str, message_text: str):
             reply = _handle_subscribe(from_phone, stock_code, notify_time)
         elif cmd_type == "unsubscribe":
             reply = _handle_unsubscribe(from_phone, stock_code)
+        elif cmd_type == "set_alert":
+            target_price = command.get("target_price")
+            direction = command.get("direction", "below")
+            reply = _handle_set_alert(from_phone, stock_code, target_price, direction)
+        elif cmd_type == "remove_alert":
+            reply = _handle_remove_alert(from_phone, stock_code)
         elif cmd_type == "help":
             reply = get_help_message()
         else:

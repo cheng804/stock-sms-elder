@@ -63,6 +63,9 @@ def parse_command(message: str) -> dict:
         "訂閱 2330" / "訂閱2330"     -> subscribe（預設 08:30）
         "訂閱 2330 09:00"            -> subscribe 指定時間
         "取消 2330" / "退訂 2330"    -> unsubscribe
+        "警報 2330 750"              -> set_alert（跌破 750 通知）
+        "警報 2330 800 突破"          -> set_alert（突破 800 通知）
+        "取消警報 2330"              -> remove_alert
         "說明" / "help" / "HELP"     -> help
         其他                         -> unknown
 
@@ -72,7 +75,8 @@ def parse_command(message: str) -> dict:
     Returns:
         dict:
             - type (str): "price" | "buy_analysis" | "subscribe" |
-                          "unsubscribe" | "help" | "unknown"
+                          "unsubscribe" | "set_alert" | "remove_alert" |
+                          "help" | "unknown"
             - stock_code (str | None): 股票代號（純數字或英文）
             - time (str | None): 訂閱時間（HH:MM），僅 subscribe 指令有值
             - raw (str): 原始訊息
@@ -114,6 +118,38 @@ def parse_command(message: str) -> dict:
             return {
                 "type": "unsubscribe",
                 "stock_code": stock_code,
+                "time": None,
+                "raw": msg,
+            }
+
+    # ── 取消警報 ──────────────────────────
+    remove_alert_keywords = ["取消警報", "刪除警報", "移除警報"]
+    for kw in remove_alert_keywords:
+        if kw in msg or kw in msg_no_space:
+            stock_code = _extract_stock_code(msg)
+            return {
+                "type": "remove_alert",
+                "stock_code": stock_code,
+                "time": None,
+                "raw": msg,
+            }
+
+    # ── 設定警報 ──────────────────────────
+    # 格式：警報 2330 750  或  警報 2330 800 突破
+    alert_keywords = ["警報", "提醒", "到價"]
+    for kw in alert_keywords:
+        if kw in msg or kw in msg_no_space:
+            stock_code = _extract_stock_code(msg)
+            # 擷取目標價（浮點數）
+            price_match = re.search(r"(\d+(?:\.\d+)?)", re.sub(r"^\S+\s*", "", msg))
+            target_price = float(price_match.group(1)) if price_match else None
+            # 判斷方向：預設跌破，若有「突破」「漲到」「up」改為 above
+            direction = "above" if any(w in msg for w in ["突破", "漲到", "up", "UP"]) else "below"
+            return {
+                "type": "set_alert",
+                "stock_code": stock_code,
+                "target_price": target_price,
+                "direction": direction,
                 "time": None,
                 "raw": msg,
             }
@@ -165,6 +201,10 @@ def get_help_message() -> str:
         "  直接傳股票代號\n"
         "  例：2330\n"
         "\n"
+        "【買賣分析（含RSI）】\n"
+        "  代號 買\n"
+        "  例：2330買\n"
+        "\n"
         "【訂閱每日通知】\n"
         "  訂閱 代號 時間\n"
         "  例：訂閱 2330 08:30\n"
@@ -173,8 +213,15 @@ def get_help_message() -> str:
         "  取消 代號\n"
         "  例：取消 2330\n"
         "\n"
-        "【關閉服務】\n"
-        "  傳「停止」\n"
+        "【設定到價警報】\n"
+        "  警報 代號 目標價\n"
+        "  例：警報 2330 750\n"
+        "  加「突破」改為向上警報\n"
+        "  例：警報 2330 800 突破\n"
+        "\n"
+        "【取消警報】\n"
+        "  取消警報 代號\n"
+        "  例：取消警報 2330\n"
         "\n"
         "再傳「說明」可再看這則訊息。"
     )

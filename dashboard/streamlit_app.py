@@ -580,6 +580,58 @@ else:
             today_cnt = "—"
         st.metric("今日查詢次數", today_cnt)
 
+st.divider()
+
+# ─────────────────────────────────────────
+#  價格警報管理
+# ─────────────────────────────────────────
+
+st.subheader("🔔 價格警報管理")
+
+@st.cache_data(ttl=15)
+def load_alerts() -> list:
+    try:
+        from app.database import get_all_alerts_for_dashboard
+        return get_all_alerts_for_dashboard()
+    except Exception as e:
+        st.error(f"無法載入警報資料：{e}")
+        return []
+
+alerts = load_alerts()
+
+if alerts:
+    df_alerts = pd.DataFrame(alerts)
+    df_alerts["手機後4碼"] = df_alerts["phone_number"].apply(
+        lambda x: f"****{x[-4:]}" if x and len(x) >= 4 else x
+    )
+    df_alerts["股票代號"] = df_alerts["stock_code"].str.replace(
+        r"\.(TW|TWO)$", "", regex=True
+    )
+    df_alerts["目標價"] = df_alerts["target_price"].apply(lambda x: f"{x:.0f} 元")
+    df_alerts["方向"] = df_alerts["direction"].map(
+        {"below": "📉 跌破", "above": "📈 突破"}
+    )
+    df_alerts["狀態"] = df_alerts["is_active"].map(
+        {True: "⏳ 監控中", False: "✅ 已觸發"}
+    )
+
+    display_cols = ["手機後4碼", "股票代號", "目標價", "方向", "狀態", "triggered_at", "created_at"]
+    df_show = df_alerts[display_cols].rename(columns={
+        "triggered_at": "觸發時間",
+        "created_at": "設定時間",
+    })
+    st.dataframe(df_show, use_container_width=True, hide_index=True)
+
+    active_count = sum(1 for a in alerts if a["is_active"])
+    triggered_count = len(alerts) - active_count
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("⏳ 監控中", active_count)
+    with c2:
+        st.metric("✅ 已觸發", triggered_count)
+else:
+    st.info("目前沒有設定任何價格警報")
+
 # ─────────────────────────────────────────
 #  自動重新整理
 # ─────────────────────────────────────────
