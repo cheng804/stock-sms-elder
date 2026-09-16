@@ -252,6 +252,12 @@ def get_stock_history(stock_code: str, days: int = 30) -> dict:
         valid_closes = [c for c in closes if c is not None]
         avg_price = round(sum(valid_closes) / len(valid_closes), 2) if valid_closes else None
 
+        volumes = [int(v) if v else 0 for v in hist["Volume"]]
+        valid_volumes = [v for v in volumes if v > 0]
+        # 最後一筆是今日，均量用前面的資料算（排除今日避免影響）
+        avg_volume = int(sum(valid_volumes[:-1]) / len(valid_volumes[:-1])) if len(valid_volumes) > 1 else None
+        today_volume = volumes[-1] if volumes else None
+
         return {
             "success": True,
             "code": normalized,
@@ -259,8 +265,10 @@ def get_stock_history(stock_code: str, days: int = 30) -> dict:
             "closes": closes,
             "highs": [_safe_float(v) for v in hist["High"]],
             "lows": [_safe_float(v) for v in hist["Low"]],
-            "volumes": [int(v) if v else 0 for v in hist["Volume"]],
+            "volumes": volumes,
             "avg_price": avg_price,
+            "avg_volume": avg_volume,
+            "today_volume": today_volume,
         }
 
     except Exception as e:

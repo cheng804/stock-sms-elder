@@ -73,6 +73,14 @@ def format_simple_response(stock_info: dict, query_type: str, history: Optional[
             else:
                 lines.append("目前股價在合理範圍。")
 
+        # 爆量偵測
+        avg_vol = history.get("avg_volume") if history and history.get("success") else None
+        today_vol = history.get("today_volume") if history and history.get("success") else None
+        if avg_vol and today_vol and avg_vol > 0:
+            vol_ratio = today_vol / avg_vol
+            if vol_ratio >= 2.0:
+                lines.append(f"🔥 今日爆量！成交量是近期均量的 {vol_ratio:.1f} 倍，有大戶在動，請多留意！")
+
         if is_prev:
             lines.append("（尚未開盤，以上為昨日收盤價）")
         elif change and change > 0:

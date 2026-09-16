@@ -111,7 +111,7 @@ def parse_command(message: str) -> dict:
             }
 
     # ── 退訂 ──────────────────────────────
-    unsubscribe_keywords = ["取消", "退訂", "退订", "unsubscribe", "停止"]
+    unsubscribe_keywords = ["退訂", "退订", "unsubscribe"]
     for kw in unsubscribe_keywords:
         if kw in msg.lower() or kw in msg_no_space.lower():
             stock_code = _extract_stock_code(msg)
@@ -121,6 +121,15 @@ def parse_command(message: str) -> dict:
                 "time": None,
                 "raw": msg,
             }
+    # 「取消」單獨出現（不含「警報」）才視為退訂
+    if "取消" in msg and not any(w in msg for w in ["警報", "提醒", "到價"]):
+        stock_code = _extract_stock_code(msg)
+        return {
+            "type": "unsubscribe",
+            "stock_code": stock_code,
+            "time": None,
+            "raw": msg,
+        }
 
     # ── 取消警報 ──────────────────────────
     remove_alert_keywords = ["取消警報", "刪除警報", "移除警報"]
@@ -140,8 +149,13 @@ def parse_command(message: str) -> dict:
     for kw in alert_keywords:
         if kw in msg or kw in msg_no_space:
             stock_code = _extract_stock_code(msg)
-            # 擷取目標價（浮點數）
-            price_match = re.search(r"(\d+(?:\.\d+)?)", re.sub(r"^\S+\s*", "", msg))
+            # 擷取目標價：在股票代號之後的第一個數字（排除代號本身）
+            # 先移除關鍵字和股票代號，再找剩餘的數字
+            remaining = msg
+            remaining = re.sub(r"[警報提醒到價]", "", remaining)
+            if stock_code:
+                remaining = re.sub(re.escape(stock_code), "", remaining, count=1)
+            price_match = re.search(r"(\d+(?:\.\d+)?)", remaining)
             target_price = float(price_match.group(1)) if price_match else None
             # 判斷方向：預設跌破，若有「突破」「漲到」「up」改為 above
             direction = "above" if any(w in msg for w in ["突破", "漲到", "up", "UP"]) else "below"
@@ -200,6 +214,7 @@ def get_help_message() -> str:
         "【查股價】\n"
         "  直接傳股票代號\n"
         "  例：2330\n"
+        "  ※ 有爆量時會自動提示\n"
         "\n"
         "【買賣分析（含RSI）】\n"
         "  代號 買\n"
