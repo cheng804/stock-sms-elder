@@ -16,7 +16,7 @@ FAKE_PHONE = "+886900000000"
 
 from app.sms_handler import parse_command, get_help_message
 from app.stock_fetcher import get_stock_info, get_stock_history
-from app.ai_analyzer import generate_elder_friendly_analysis, format_simple_response
+from app.response_formatter import generate_elder_friendly_analysis, format_simple_response
 from app.database import (
     get_or_create_user, activate_user, deactivate_user, is_user_active,
     log_query, add_subscription, remove_subscription

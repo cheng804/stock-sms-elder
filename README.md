@@ -11,7 +11,7 @@
 卻對股票投資很有興趣。  
 這個專題讓長輩只要傳 `2330` 這樣一則簡訊，  
 系統就會自動回傳台積電的即時股價、漲跌幅，  
-還能用白話文解釋「今天是貴還是便宜」。
+還能用簡單易懂的文字解釋「今天是貴還是便宜」。
 
 ---
 
@@ -34,8 +34,8 @@
 │  │ 解析指令   │  │ yfinance 抓價 │  │
 │  └────────────┘  └───────────────┘  │
 │  ┌────────────┐  ┌───────────────┐  │
-│  │ai_analyzer │  │   database    │  │
-│  │ AI 白話文  │  │ SQLite 記錄   │  │
+│  │response_ │  │   database    │  │
+│  │formatter │  │ SQLite 記錄   │  │
 │  └────────────┘  └───────────────┘  │
 │  ┌────────────┐                     │
 │  │ scheduler  │  APScheduler 排程   │
@@ -66,10 +66,10 @@
 | 功能 | 說明 |
 |------|------|
 | 📈 即時查價 | 傳股票代號，回傳即時股價、漲跌、今日高低 |
-| 📊 買賣分析 | 結合近 30 天均價，AI 白話文解釋貴不貴 |
+| 📊 買賣分析 | 結合近 30 天均價，規則引擎判斷貴不貴 |
 | 🔔 訂閱通知 | 每天指定時間自動發送股票資訊 |
 | ❌ 退訂 | 隨時可以取消訂閱 |
-| 🤖 AI 分析 | 使用 GPT-3.5 用長輩口吻解釋股票 |
+| 🧠 個人化建議 | 依據查詢歷史提供訂閱提醒、關注股比較、頻率警示 |
 | 🗄️ 查詢記錄 | SQLite 記錄所有查詢供後台檢視 |
 | 📊 管理後台 | Streamlit Dashboard 即時統計圖表 |
 
@@ -79,8 +79,7 @@
 
 - Python 3.10 以上
 - Twilio 帳號（需信用卡驗證，有免費試用）
-- OpenAI API Key（選填，不填使用簡單格式）
-- 可公開存取的 HTTPS 網址（供 Twilio Webhook 用）
+- 可公開存取的 HTTPS 網址（供 Webhook 用）
   - 開發時可用 [ngrok](https://ngrok.com) 暫時使用
 
 ---
@@ -124,7 +123,6 @@ cp .env.example .env
 TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TWILIO_AUTH_TOKEN=your_auth_token_here
 TWILIO_PHONE_NUMBER=+1234567890
-OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   # 選填
 ```
 
 ---
@@ -137,11 +135,9 @@ OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   # 選填
 2. 在「Phone Numbers」購買一個支援 SMS 的號碼
 3. 複製 Account SID、Auth Token、Phone Number 填入 `.env`
 
-### OpenAI 設定（選填）
+### OpenAI 設定（不需要）
 
-1. 前往 [https://platform.openai.com](https://platform.openai.com) 取得 API Key
-2. 填入 `.env` 的 `OPENAI_API_KEY`
-3. 若不填，系統會使用預設的格式化回應（不呼叫 AI）
+本系統使用規則引擎產生回覆，不依賴外部 AI 服務，無需設定 OpenAI API Key。
 
 ---
 
@@ -268,7 +264,7 @@ stock-sms-elder/
 │   ├── main.py              # FastAPI 主程式 + Webhook 入口
 │   ├── sms_handler.py       # 解析簡訊指令
 │   ├── stock_fetcher.py     # 抓取股票資料 (yfinance)
-│   ├── ai_analyzer.py       # AI 白話文分析 (OpenAI)
+│   ├── response_formatter.py # 規則引擎：格式化股票回覆文字
 │   ├── twilio_client.py     # Twilio 發送/接收簡訊
 │   ├── database.py          # SQLite 資料庫操作 (SQLAlchemy)
 │   └── scheduler.py         # 訂閱排程 (APScheduler)
@@ -289,8 +285,8 @@ A: 確認 Twilio Webhook URL 是否填對，且使用 HTTPS。用 `/health` 端�
 **Q: 股票代號查不到？**  
 A: 台股輸入 4~5 位數字。部分冷門股 yfinance 可能沒資料，可先到 Yahoo Finance 查確認代號。
 
-**Q: AI 回覆不夠生動？**  
-A: 確認 `.env` 中有填入有效的 `OPENAI_API_KEY`，並確認 OpenAI 帳號有餘額。
+**Q: 回覆內容不夠生動？**  
+A: 系統使用規則引擎產生固定格式回覆，可自行在 `response_formatter.py` 調整文字內容。
 
 **Q: 排程通知沒有發送？**  
 A: 確認 Twilio 設定正確，且 FastAPI 服務持續在運行中。

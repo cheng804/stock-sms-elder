@@ -1,16 +1,11 @@
 """
-ai_analyzer.py - AI 白話文分析模組
+response_formatter.py - 回覆格式化模組
 
-使用 OpenAI API 將股票資料轉換成長輩友善的白話文說明。
-若未設定 API Key，自動 fallback 到純格式化輸出。
+將股票資料依據規則引擎轉換成長輩友善的白話文簡訊。
+不依賴任何外部 AI 服務，純本地邏輯。
 """
 
-import os
 from typing import Optional
-from dotenv import load_dotenv
-
-load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 
 def _clean_code(code: str) -> str:
