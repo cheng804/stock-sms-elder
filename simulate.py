@@ -15,12 +15,14 @@ sys.path.insert(0, ".")
 FAKE_PHONE = "+886900000000"
 
 from app.sms_handler import parse_command, get_help_message
-from app.stock_fetcher import get_stock_info, get_stock_history
+from app.stock_fetcher import get_stock_info, get_stock_history, calculate_rsi
 from app.response_formatter import generate_elder_friendly_analysis, format_simple_response
+from app.intent_parser import parse_intent
 from app.database import (
     get_or_create_user, activate_user, deactivate_user, is_user_active,
     log_query, add_subscription, remove_subscription
 )
+from app.personal_advisor import get_personal_advice
 
 def handle_message(message: str) -> str:
     """處理一則模擬簡訊，回傳系統回應"""
@@ -29,6 +31,25 @@ def handle_message(message: str) -> str:
     cmd_type = command["type"]
     stock_code = command.get("stock_code")
     notify_time = command.get("time") or "08:30"
+    
+    # 若 parse_command 無法識別（unknown），改用 intent_parser 處理模糊語意
+    if cmd_type == "unknown":
+        intent = parse_intent(message)
+        i_type = intent.get("type", "unknown")
+        i_code = intent.get("stock_code")
+        
+        if i_type == "price" and i_code:
+            cmd_type = "price"
+            stock_code = i_code
+        elif i_type == "buy_analysis" and i_code:
+            cmd_type = "buy_analysis"
+            stock_code = i_code
+        elif i_type == "safe_pick":
+            reply = intent.get("message") or "穩健型可考慮 0050 或 0056 ETF。"
+            log_query(FAKE_PHONE, None, "safe_pick", reply)
+            return reply
+        elif i_type == "help":
+            cmd_type = "help"
 
     # 開始指令
     if cmd_type == "start":
@@ -62,6 +83,11 @@ def handle_message(message: str) -> str:
         else:
             history = get_stock_history(stock_code, days=30)
             reply = generate_elder_friendly_analysis(info, history, "price")
+            
+            # 加上個人化建議（若有）
+            advice = get_personal_advice(FAKE_PHONE, stock_code, info.get("price"))
+            if advice:
+                reply += f"\n\n💡 小提醒：\n{advice}"
 
     elif cmd_type == "buy_analysis":
         info = get_stock_info(stock_code)
@@ -69,7 +95,8 @@ def handle_message(message: str) -> str:
             reply = info.get("error", f"😅 查不到 {stock_code}")
         else:
             history = get_stock_history(stock_code, days=30)
-            reply = generate_elder_friendly_analysis(info, history, "buy_analysis")
+            rsi_data = calculate_rsi(stock_code)
+            reply = generate_elder_friendly_analysis(info, history, "buy_analysis", rsi_data=rsi_data)
 
     elif cmd_type == "subscribe":
         if not stock_code:
