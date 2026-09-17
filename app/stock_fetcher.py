@@ -395,3 +395,84 @@ def calculate_rsi(stock_code: str, period: int = 14) -> dict:
             "signal": "錯誤",
             "description": f"RSI 計算失敗：{e}",
         }
+
+
+def calculate_macd(stock_code: str,
+                   fast: int = 12, slow: int = 26, signal: int = 9) -> dict:
+    """
+    計算 MACD（指數平滑異同移動平均線）。
+
+    需要至少 slow+signal+10 天的收盤價。
+    回傳最新一日的 MACD 值，以及是否發生交叉訊號。
+
+    Args:
+        stock_code: 股票代號
+        fast:       快線週期，預設 12
+        slow:       慢線週期，預設 26
+        signal:     訊號線週期，預設 9
+
+    Returns:
+        dict 包含:
+            success (bool)
+            macd      (float): MACD 線最新值
+            signal_line (float): 訊號線最新值
+            histogram (float): 柱狀值（MACD - Signal）
+            cross     (str | None): "golden"（黃金交叉）| "dead"（死亡交叉）| None
+            description (str): 長輩友善說明
+    """
+    normalized = _normalize_stock_code(stock_code)
+    try:
+        ticker, normalized = _try_get_ticker(normalized)
+        # 需要足夠天數讓 EMA 穩定
+        hist = ticker.history(period=f"{slow + signal + 30}d")
+
+        if hist.empty or len(hist) < slow + signal:
+            return {
+                "success": False,
+                "cross": None,
+                "description": "歷史資料不足，無法計算 MACD。",
+            }
+
+        closes = hist["Close"].dropna()
+
+        ema_fast   = closes.ewm(span=fast,   adjust=False).mean()
+        ema_slow   = closes.ewm(span=slow,   adjust=False).mean()
+        macd_line  = ema_fast - ema_slow
+        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+        histogram  = macd_line - signal_line
+
+        macd_val   = round(float(macd_line.iloc[-1]),   4)
+        signal_val = round(float(signal_line.iloc[-1]), 4)
+        hist_val   = round(float(histogram.iloc[-1]),   4)
+
+        # 交叉偵測：昨日 MACD < Signal，今日 MACD > Signal → 黃金交叉
+        prev_macd   = float(macd_line.iloc[-2])
+        prev_signal = float(signal_line.iloc[-2])
+
+        cross = None
+        if prev_macd < prev_signal and macd_val > signal_val:
+            cross = "golden"
+            description = "MACD 出現黃金交叉（多頭訊號），短期動能轉強，可以多留意！"
+        elif prev_macd > prev_signal and macd_val < signal_val:
+            cross = "dead"
+            description = "MACD 出現死亡交叉（空頭訊號），短期動能轉弱，操作要謹慎！"
+        elif macd_val > 0:
+            description = f"MACD {macd_val}，目前在零軸上方，趨勢偏多。"
+        else:
+            description = f"MACD {macd_val}，目前在零軸下方，趨勢偏空。"
+
+        return {
+            "success": True,
+            "macd": macd_val,
+            "signal_line": signal_val,
+            "histogram": hist_val,
+            "cross": cross,
+            "description": description,
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "cross": None,
+            "description": f"MACD 計算失敗：{e}",
+        }

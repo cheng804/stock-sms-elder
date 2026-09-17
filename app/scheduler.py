@@ -19,6 +19,68 @@ logger = logging.getLogger(__name__)
 #  通知發送邏輯
 # ─────────────────────────────────────────
 
+def check_macd_signals() -> None:
+    """
+    對每位使用者訂閱的股票計算 MACD，
+    出現黃金交叉或死亡交叉時主動發送預警簡訊。
+    每天 08:30 由排程器呼叫一次（與訂閱通知同一時間點）。
+    """
+    from app.database import get_all_subscriptions, log_query
+    from app.stock_fetcher import get_stock_info, calculate_macd
+    from app.sms_client import send_sms
+
+    subscriptions = get_all_subscriptions()
+    if not subscriptions:
+        return
+
+    # 同一股票只計算一次 MACD，避免重複打 API
+    macd_cache: dict = {}
+
+    logger.info(f"[MACD] 開始檢查 {len(subscriptions)} 筆訂閱的 MACD 訊號。")
+
+    for sub in subscriptions:
+        phone = sub.phone_number
+        stock_code = sub.stock_code
+        clean = stock_code.replace(".TWO", "").replace(".TW", "")
+
+        try:
+            if stock_code not in macd_cache:
+                macd_cache[stock_code] = calculate_macd(stock_code)
+            macd = macd_cache[stock_code]
+
+            if not macd.get("success") or not macd.get("cross"):
+                continue  # 無交叉訊號，跳過
+
+            info = get_stock_info(stock_code)
+            price_str = f"{info['price']:.2f}" if info.get("success") and info.get("price") else "—"
+
+            cross = macd["cross"]
+            if cross == "golden":
+                emoji = "🟢"
+                signal_text = "黃金交叉（多頭訊號）"
+                action_hint = "短期動能轉強，可以留意買入機會。"
+            else:
+                emoji = "🔴"
+                signal_text = "死亡交叉（空頭訊號）"
+                action_hint = "短期動能轉弱，操作要謹慎。"
+
+            reply = (
+                f"{emoji} MACD 技術預警：{clean}\n"
+                f"出現 {signal_text}\n"
+                f"現價：{price_str} 元\n"
+                f"{action_hint}\n"
+                f"傳「{clean}買」可查看完整分析。\n"
+                f"投資有風險，請謹慎！"
+            )
+
+            send_sms(phone, reply)
+            log_query(phone, stock_code, "macd_alert", reply)
+            logger.info(f"[MACD] 預警發送：{phone} -> {clean} {signal_text}")
+
+        except Exception as e:
+            logger.error(f"[MACD] 處理 {phone}/{stock_code} 時發生錯誤：{e}")
+
+
 def check_price_alerts() -> None:
     """
     檢查所有啟用中的價格警報，股價觸及目標價時發送簡訊通知。
@@ -131,9 +193,10 @@ def _check_and_notify() -> None:
     current_time = f"{now.hour:02d}:{now.minute:02d}"
     logger.debug(f"[排程] 每分鐘檢查：台灣時間 {current_time}")
     send_subscription_notifications(current_time)
-    # 每天 08:30 執行警報檢查
+    # 每天 08:30 執行警報檢查與 MACD 預警
     if current_time == "08:30":
         check_price_alerts()
+        check_macd_signals()
 
 
 # ─────────────────────────────────────────

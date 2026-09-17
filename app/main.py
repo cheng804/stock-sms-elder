@@ -32,6 +32,7 @@ from app.stock_fetcher import get_stock_info, get_stock_history, calculate_fair_
 from app.response_formatter import generate_elder_friendly_analysis, format_simple_response
 from app.sms_client import parse_incoming_webhook, verify_webhook_signature, send_sms
 from app.personal_advisor import get_personal_advice
+from app.intent_parser import parse_intent
 
 TEXTBEE_WEBHOOK_SECRET = os.getenv("TEXTBEE_WEBHOOK_SECRET", "")
 from app.database import (
@@ -270,11 +271,38 @@ async def _process_message(from_phone: str, message_text: str):
         # 確保使用者存在
         get_or_create_user(from_phone)
 
-        # 解析指令
+        # ── 意圖解析：先用 parse_command 處理明確指令 ──────────
         command = parse_command(message_text)
         cmd_type = command["type"]
         stock_code = command.get("stock_code")
         notify_time = command.get("time") or "08:30"
+        intent_reply = None  # intent_parser 產生的直接回覆
+
+        # 若 parse_command 無法識別（unknown），改用 intent_parser 處理模糊語意
+        if cmd_type == "unknown":
+            intent = parse_intent(message_text)
+            i_type = intent.get("type", "unknown")
+            i_code = intent.get("stock_code")
+            i_msg  = intent.get("message")
+
+            if i_type == "safe_pick":
+                # 「買哪隻比較安全」類問題，直接回覆建議文字
+                intent_reply = i_msg or (
+                    "穩健型可考慮 0050（台灣50）或 0056（高股息）ETF，\n"
+                    "分散風險、長期持有，適合穩健投資。\n"
+                    "傳代號查看最新股價，例如：0050"
+                )
+                cmd_type = "safe_pick"
+            elif i_type in ("price", "buy_analysis") and i_code:
+                cmd_type  = i_type
+                stock_code = i_code
+                command["stock_code"] = i_code
+            elif i_type == "help":
+                cmd_type = "help"
+            elif i_msg:
+                # GPT 給了回覆但不知道怎麼處理，直接用 GPT 的回覆
+                intent_reply = i_msg
+                cmd_type = "gpt_reply"
 
         # 開始指令：任何人都可以用，啟用服務
         if cmd_type == "start":
@@ -307,9 +335,15 @@ async def _process_message(from_phone: str, message_text: str):
 
         # 根據指令處理
         if cmd_type == "price":
+            # 先記錄本次查詢，讓個人化建議能讀到最新計數（含本次）
+            log_query(from_phone, stock_code, cmd_type, None)
             reply = _handle_price(stock_code, from_phone)
+            # 更新回覆內容到 log
+            log_query(from_phone, stock_code, f"{cmd_type}_response", reply)
         elif cmd_type == "buy_analysis":
+            log_query(from_phone, stock_code, cmd_type, None)
             reply = _handle_buy_analysis(stock_code, from_phone)
+            log_query(from_phone, stock_code, f"{cmd_type}_response", reply)
         elif cmd_type == "subscribe":
             reply = _handle_subscribe(from_phone, stock_code, notify_time)
         elif cmd_type == "unsubscribe":
@@ -322,15 +356,17 @@ async def _process_message(from_phone: str, message_text: str):
             reply = _handle_remove_alert(from_phone, stock_code)
         elif cmd_type == "help":
             reply = get_help_message()
+        elif cmd_type in ("safe_pick", "gpt_reply"):
+            reply = intent_reply
         else:
             reply = (
                 "😅 看不懂您的指令。\n"
                 "傳「說明」可以看完整的操作方式，\n"
                 "或直接傳股票代號，例如：2330"
             )
-
-        # 記錄 log
-        log_query(from_phone, stock_code, cmd_type, reply)
+        # 記錄 log（price/buy_analysis 已在上面記錄，其他在這裡記錄）
+        if cmd_type not in ("price", "buy_analysis"):
+            log_query(from_phone, stock_code, cmd_type, reply)
 
         # 主動發送回覆簡訊
         send_sms(from_phone, reply)

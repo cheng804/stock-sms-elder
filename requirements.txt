@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 yfinance
-openai
+openai>=1.0.0
 sqlalchemy
 python-dotenv
 apscheduler
