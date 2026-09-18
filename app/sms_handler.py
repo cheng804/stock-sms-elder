@@ -25,8 +25,8 @@ def _extract_stock_code(text: str) -> Optional[str]:
     match = re.search(r"(?<!\d)(\d{4,6}[A-Za-z]?)(?!\d)", text)
     if match:
         return match.group(1).upper()
-    # 再找純英文（美股）
-    match = re.search(r"(?<![A-Za-z])([A-Z]{1,5})(?![A-Za-z])", text.upper())
+    # 再找純英文（美股），但排除太短的（1-2字元交給 intent_parser 處理）
+    match = re.search(r"(?<![A-Za-z])([A-Z]{3,5})(?![A-Za-z])", text.upper())
     if match:
         candidate = match.group(1)
         if candidate not in {"HELP", "SUB", "UNSUB", "BUY", "START", "STOP"}:
@@ -183,8 +183,9 @@ def parse_command(message: str) -> dict:
 
     # ── 單純查價：訊息幾乎只有股票代號 ───
     # 移除空白和標點後，若只剩股票代號則視為查價
+    # 但英文代號必須 3 字元以上（1-2 字元交給 intent_parser）
     clean = re.sub(r"[\s\.,，。！!？?]+", "", msg)
-    if re.match(r"^(\d{4,6}|[A-Za-z]{1,5})$", clean):
+    if re.match(r"^(\d{4,6}|[A-Za-z]{3,5})$", clean):
         return {
             "type": "price",
             "stock_code": clean.upper() if clean.isalpha() else clean,
