@@ -216,7 +216,6 @@ def get_personal_advice(
         checks = [
             _advice_frequency_warning(phone, stock_code),
             _advice_subscription_reminder(phone, stock_code),
-            _advice_subscription_performance(phone, stock_code),
             _advice_last_query_tracking(phone, stock_code, current_price),
             _advice_watchlist_compare(phone, stock_code, current_price),
         ]
