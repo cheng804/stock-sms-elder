@@ -45,17 +45,29 @@ def _clean_code(code: str) -> str:
 
 def _advice_frequency_warning(phone: str, stock_code: str) -> Optional[str]:
     """
-    查詢頻率警示：同一天查同一支股票超過閾值次數，
+    查詢頻率警示：同一支股票查詢次數過多時，
     提醒長輩不要太緊張。
 
     Returns:
         建議文字，或 None
     """
-    today_count = get_user_query_today_count(phone)
-    if today_count >= _HIGH_FREQUENCY_THRESHOLD:
-        clean = _clean_code(stock_code)
+    clean = _clean_code(stock_code)
+    
+    # 取得此股票的歷史查詢次數（全部時間，不限今天）
+    favorites = get_user_favorite_stocks(phone, top_n=10)
+    this_stock = next(
+        (f for f in favorites if _clean_code(f["stock_code"]) == clean),
+        None,
+    )
+    
+    if not this_stock:
+        return None
+    
+    stock_count = this_stock["count"]
+    
+    if stock_count >= _HIGH_FREQUENCY_THRESHOLD:
         return (
-            f"⚠️ 您今天已查詢 {today_count} 次了，\n"
+            f"⚠️ 您已查詢 {clean} 達 {stock_count} 次了，\n"
             f"股價短期波動很正常，請放鬆心情！"
         )
     return None
