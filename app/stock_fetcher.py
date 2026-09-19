@@ -216,6 +216,7 @@ def get_stock_info(stock_code: str) -> dict:
             "low": _safe_float(info.get("regularMarketDayLow")),
             "prev_close": prev_close,
             "market_cap": info.get("marketCap"),
+            "is_prev_close": False,  # 明確標示這是即時價格
         }
 
     except Exception as e:
