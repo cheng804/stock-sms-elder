@@ -54,12 +54,16 @@ def format_simple_response(stock_info: dict, query_type: str, history: Optional[
             f"代號：{code}",
             f"{prefix}：{price_str} 元",
         ]
-        if not is_prev:
+        # 漲跌資訊（無論是否昨日收盤都顯示）
+        if change is not None and change_pct is not None:
             lines.append(f"漲跌：{change_str} {pct_str}")
+        
+        # 今日/昨日區間
         high = stock_info.get("high")
         low = stock_info.get("low")
-        if high and low and not is_prev:
-            lines.append(f"今日區間：{low:.2f}～{high:.2f}")
+        if high and low:
+            range_label = "昨日區間" if is_prev else "今日區間"
+            lines.append(f"{range_label}：{low:.2f}～{high:.2f}")
 
         # 均價分析（直接放在查價結果裡）
         avg_30d = history.get("avg_price") if history and history.get("success") else None
