@@ -144,17 +144,39 @@ def get_stock_info(stock_code: str) -> dict:
         info = ticker.info
 
         if not info or info.get("regularMarketPrice") is None:
-            hist = ticker.history(period="2d")
+            hist = ticker.history(period="5d")  # 改用 5 天確保有足夠資料
             if hist.empty:
                 return {
                     "success": False,
                     "code": normalized,
                     "error": f"找不到股票代號 {stock_code}，請確認是否正確。",
                 }
+            
+            # 取最近兩筆有效資料
+            if len(hist) < 2:
+                # 只有一天資料，無法計算漲跌
+                last_row = hist.iloc[-1]
+                price = _safe_float(last_row["Close"])
+                return {
+                    "success": True,
+                    "code": normalized,
+                    "name": _get_name(info, normalized),
+                    "price": price,
+                    "change": None,
+                    "change_percent": None,
+                    "volume": int(last_row["Volume"]) if last_row["Volume"] else None,
+                    "open": _safe_float(last_row["Open"]),
+                    "high": _safe_float(last_row["High"]),
+                    "low": _safe_float(last_row["Low"]),
+                    "prev_close": None,
+                    "market_cap": info.get("marketCap"),
+                    "is_prev_close": True,
+                }
+            
             last_row = hist.iloc[-1]
-            prev_row = hist.iloc[-2] if len(hist) > 1 else None
+            prev_row = hist.iloc[-2]
             price = _safe_float(last_row["Close"])
-            prev_close = _safe_float(prev_row["Close"]) if prev_row is not None else None
+            prev_close = _safe_float(prev_row["Close"])
             change = round(price - prev_close, 2) if price and prev_close else None
             change_pct = round(change / prev_close * 100, 2) if change and prev_close else None
             return {
