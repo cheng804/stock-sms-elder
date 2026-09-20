@@ -186,14 +186,23 @@ def send_subscription_notifications(notify_time: str) -> None:
 def _check_and_notify() -> None:
     """
     每分鐘執行的任務：取得台灣時間，呼叫對應的通知函數。
+    週末（六、日）不發送訂閱通知和警報。
     """
     from datetime import timezone, timedelta
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz)
     current_time = f"{now.hour:02d}:{now.minute:02d}"
+    weekday = now.weekday()  # 0=週一, 6=週日
+    
+    # 週末（5=週六, 6=週日）不發送通知
+    if weekday >= 5:
+        logger.debug(f"[排程] 今天是週末（weekday={weekday}），跳過通知。")
+        return
+    
     logger.debug(f"[排程] 每分鐘檢查：台灣時間 {current_time}")
     send_subscription_notifications(current_time)
-    # 每天 08:30 執行警報檢查與 MACD 預警
+    
+    # 每天 08:30 執行警報檢查與 MACD 預警（僅平日）
     if current_time == "08:30":
         check_price_alerts()
         check_macd_signals()
