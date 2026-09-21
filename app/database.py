@@ -680,7 +680,7 @@ def get_all_users_with_activity() -> List[dict]:
                 "created_at": user.created_at,
                 "total_queries": stats.total if stats else 0,
                 "last_query_at": stats.last_at if stats else None,
-                "favorite_stock": top.stock_code if top else None,
+                "favorite_stock": top.stock_code.replace(".TW", "").replace(".TWO", "") if top and top.stock_code else None,
             })
         return result
     finally:
@@ -1022,62 +1022,6 @@ def get_recent_logs(limit: int = 50) -> List[dict]:
             }
             for log in logs
         ]
-    finally:
-        db.close()
-
-
-def get_all_users_with_activity() -> List[dict]:
-    """
-    取得所有使用者及其活動統計。
-
-    Returns:
-        使用者活動列表
-    """
-    db = get_db()
-    try:
-        users = db.query(User).all()
-        result = []
-        for user in users:
-            # 計算總查詢次數
-            total_queries = (
-                db.query(QueryLog)
-                .filter(QueryLog.phone_number == user.phone_number)
-                .count()
-            )
-            
-            # 取得最後查詢時間
-            last_log = (
-                db.query(QueryLog)
-                .filter(QueryLog.phone_number == user.phone_number)
-                .order_by(QueryLog.created_at.desc())
-                .first()
-            )
-            
-            # 取得最愛股票（查詢次數最多的）
-            favorite = (
-                db.query(
-                    QueryLog.stock_code,
-                    func.count(QueryLog.stock_code).label("count")
-                )
-                .filter(
-                    QueryLog.phone_number == user.phone_number,
-                    QueryLog.stock_code.isnot(None),
-                )
-                .group_by(QueryLog.stock_code)
-                .order_by(func.count(QueryLog.stock_code).desc())
-                .first()
-            )
-            
-            result.append({
-                "phone_number": user.phone_number,
-                "is_active": user.is_active,
-                "total_queries": total_queries,
-                "last_query_at": last_log.created_at if last_log else None,
-                "favorite_stock": favorite[0].replace(".TW", "").replace(".TWO", "") if favorite else None,
-                "created_at": user.created_at,
-            })
-        
-        return result
     finally:
         db.close()
 

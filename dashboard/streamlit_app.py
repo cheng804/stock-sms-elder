@@ -207,7 +207,7 @@ def load_subscriptions() -> list:
             {
                 "手機後4碼": sub.phone_number[-4:] if len(sub.phone_number) >= 4 else sub.phone_number,
                 "完整號碼": sub.phone_number,
-                "股票代號": sub.stock_code,
+                "股票代號": sub.stock_code.replace(".TW", "").replace(".TWO", "") if sub.stock_code else "",
                 "通知時間": sub.notify_time,
                 "建立時間": sub.created_at.strftime("%Y-%m-%d %H:%M") if sub.created_at else "",
             }
