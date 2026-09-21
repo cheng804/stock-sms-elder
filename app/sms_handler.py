@@ -88,6 +88,16 @@ def parse_command(message: str) -> dict:
     # ── 說明 ──────────────────────────────
     if msg_upper in {"說明", "HELP", "？", "?", "菜單", "指令"}:
         return {"type": "help", "stock_code": None, "time": None, "raw": msg}
+    
+    # ── 我的訂閱 ──────────────────────────
+    my_sub_keywords = ["我的訂閱", "訂閱清單", "訂閱列表", "查看訂閱", "有訂閱什麼"]
+    if any(kw in msg for kw in my_sub_keywords):
+        return {"type": "list_subscriptions", "stock_code": None, "time": None, "raw": msg}
+    
+    # ── 我的警報 ──────────────────────────
+    my_alert_keywords = ["我的警報", "警報清單", "警報列表", "查看警報", "有什麼警報"]
+    if any(kw in msg for kw in my_alert_keywords):
+        return {"type": "list_alerts", "stock_code": None, "time": None, "raw": msg}
 
     # ── 開始/啟動 ─────────────────────────
     if msg_upper in {"開始", "START", "你好", "HI", "HELLO", "啟動", "開啟"}:

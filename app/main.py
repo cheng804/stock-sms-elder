@@ -197,6 +197,77 @@ def _handle_week_report(stock_code: str, phone: str) -> str:
     return reply
 
 
+def _handle_list_subscriptions(phone: str) -> str:
+    """
+    處理「我的訂閱」查詢：列出使用者所有訂閱。
+    """
+    from app.database import get_user_subscriptions
+    
+    subscriptions = get_user_subscriptions(phone)
+    
+    if not subscriptions:
+        return (
+            "📭 您目前沒有訂閱任何股票。\n\n"
+            "💡 想每天自動收到股價通知？\n"
+            "傳「訂閱 2330 08:30」即可設定！"
+        )
+    
+    lines = ["📬 您的訂閱清單：\n"]
+    for i, sub in enumerate(subscriptions, 1):
+        stock_code = sub["stock_code"].replace(".TWO", "").replace(".TW", "")
+        notify_time = sub["notify_time"]
+        lines.append(f"{i}. {stock_code} - 每天 {notify_time}")
+    
+    lines.append(f"\n共 {len(subscriptions)} 個訂閱")
+    lines.append("\n💡 取消訂閱請傳：取消 代號")
+    lines.append("例如：取消 2330")
+    
+    return "\n".join(lines)
+
+
+def _handle_list_alerts(phone: str) -> str:
+    """
+    處理「我的警報」查詢：列出使用者所有警報。
+    """
+    from app.database import get_db, PriceAlert
+    
+    db = get_db()
+    try:
+        alerts = (
+            db.query(PriceAlert)
+            .filter(
+                PriceAlert.phone_number == phone,
+                PriceAlert.is_active == True,
+            )
+            .all()
+        )
+    finally:
+        db.close()
+    
+    if not alerts:
+        return (
+            "🔕 您目前沒有設定任何警報。\n\n"
+            "💡 想在股價到達目標時收到通知？\n"
+            "傳「警報 2330 750」即可設定！\n"
+            "（跌破 750 時通知）\n\n"
+            "或傳「警報 2330 800 突破」\n"
+            "（突破 800 時通知）"
+        )
+    
+    lines = ["🔔 您的警報清單：\n"]
+    for i, alert in enumerate(alerts, 1):
+        stock_code = alert.stock_code.replace(".TWO", "").replace(".TW", "")
+        target = float(alert.target_price)
+        direction = "跌破" if alert.direction == "below" else "突破"
+        lines.append(f"{i}. {stock_code} - {direction} {target:.0f} 元")
+    
+    lines.append(f"\n共 {len(alerts)} 個警報")
+    lines.append("\n💡 取消警報請傳：取消警報 代號")
+    lines.append("例如：取消警報 2330")
+    
+    return "\n".join(lines)
+
+
 def _handle_subscribe(phone: str, stock_code: Optional[str], notify_time: str) -> str:
     """
     處理訂閱指令：寫入資料庫 -> 回傳確認訊息。
@@ -210,7 +281,13 @@ def _handle_subscribe(phone: str, stock_code: Optional[str], notify_time: str) -
         確認訊息
     """
     if not stock_code:
-        return "😅 請告訴我您要訂閱的股票代號，例如：訂閱 2330"
+        return (
+            "😅 請告訴我您要訂閱的股票代號\n\n"
+            "📱 正確格式：\n"
+            "訂閱 2330 08:30\n\n"
+            "💡 時間可省略（預設 08:30）\n"
+            "例如：訂閱 2330"
+        )
     sub = add_subscription(phone, stock_code, notify_time)
     return (
         f"✅ 訂閱成功！\n"
@@ -421,6 +498,10 @@ async def _process_message(from_phone: str, message_text: str):
             reply = _handle_remove_alert(from_phone, stock_code)
         elif cmd_type == "help":
             reply = get_help_message()
+        elif cmd_type == "list_subscriptions":
+            reply = _handle_list_subscriptions(from_phone)
+        elif cmd_type == "list_alerts":
+            reply = _handle_list_alerts(from_phone)
         elif cmd_type in ("safe_pick", "gpt_reply"):
             reply = intent_reply
         else:
