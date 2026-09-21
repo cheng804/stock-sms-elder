@@ -51,10 +51,20 @@ REFRESH_INTERVAL = 30  # 秒
 # 指令類型中文對照
 COMMAND_TYPE_LABELS = {
     "price": "查股價",
+    "price_response": "查股價",
     "buy_analysis": "買賣分析",
     "subscribe": "訂閱",
     "unsubscribe": "退訂",
+    "set_alert": "設定警報",
+    "remove_alert": "取消警報",
+    "list_subscriptions": "查看訂閱",
+    "list_alerts": "查看警報",
+    "week_report": "週報告",
     "help": "說明",
+    "start": "啟動",
+    "stop": "停止",
+    "safe_pick": "推薦股票",
+    "gpt_reply": "AI回覆",
     "unknown": "無法識別",
     "subscription_notify": "訂閱通知",
 }
@@ -330,33 +340,23 @@ st.subheader("📊 分析圖表")
 chart_col1, chart_col2 = st.columns(2)
 
 with chart_col1:
-    st.markdown("**今日 Top 5 查詢股票**")
+    st.markdown("**📊 今日 Top 5 查詢股票**")
     top_stocks = stats.get("top_stocks", [])
 
     if top_stocks:
         df_stocks = pd.DataFrame(top_stocks)
         df_stocks.columns = ["股票代號", "查詢次數"]
-        df_stocks = df_stocks.sort_values("查詢次數", ascending=True)
-
-        fig_bar = px.bar(
+        # 移除 .TW 後綴
+        df_stocks["股票代號"] = df_stocks["股票代號"].str.replace(r"\.(TW|TWO)$", "", regex=True)
+        df_stocks = df_stocks.sort_values("查詢次數", ascending=False)
+        
+        # 使用表格顯示,更清楚
+        st.dataframe(
             df_stocks,
-            x="查詢次數",
-            y="股票代號",
-            orientation="h",
-            color="查詢次數",
-            color_continuous_scale="Blues",
-            text="查詢次數",
-            height=300,
+            use_container_width=True,
+            hide_index=True,
+            height=280,
         )
-        fig_bar.update_traces(textposition="outside")
-        fig_bar.update_layout(
-            showlegend=False,
-            coloraxis_showscale=False,
-            margin=dict(l=10, r=20, t=10, b=10),
-            xaxis_title="查詢次數",
-            yaxis_title="",
-        )
-        st.plotly_chart(fig_bar, use_container_width=True)
     else:
         st.info("今日尚無查詢紀錄")
 
@@ -452,8 +452,13 @@ subs = load_subscriptions()
 if subs:
     df_subs = pd.DataFrame(subs)
     # 過濾測試帳號 (手機號碼不是正常格式的)
-    # 正常台灣手機號碼應該是 09 開頭
-    df_subs = df_subs[df_subs["完整號碼"].str.startswith("09") | df_subs["完整號碼"].str.startswith("+886")]
+    # 正常台灣手機號碼應該是 09 開頭或 +886 開頭(移除空格後檢查)
+    df_subs["_clean_phone"] = df_subs["完整號碼"].str.replace(" ", "").str.replace("-", "")
+    df_subs = df_subs[
+        df_subs["_clean_phone"].str.startswith("09") | 
+        df_subs["_clean_phone"].str.startswith("+886")
+    ]
+    df_subs = df_subs.drop(columns=["_clean_phone"], errors="ignore")
     
     if len(df_subs) > 0:
         # 不顯示完整號碼欄
