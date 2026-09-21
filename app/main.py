@@ -506,9 +506,12 @@ async def _process_message(from_phone: str, message_text: str):
             reply = intent_reply
         else:
             reply = (
-                "😅 看不懂您的指令。\n"
-                "傳「說明」可以看完整的操作方式，\n"
-                "或直接傳股票代號，例如：2330"
+                "😅 看不懂您的指令。\n\n"
+                "📱 常用功能：\n"
+                "• 直接傳代號查股價（如：2330）\n"
+                "• 我訂 - 查看我的訂閱\n"
+                "• 我警 - 查看我的警報\n"
+                "• 說明 - 看完整操作方式"
             )
         # 記錄 log（price/buy_analysis 已在上面記錄，其他在這裡記錄）
         if cmd_type not in ("price", "buy_analysis"):

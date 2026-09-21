@@ -90,13 +90,25 @@ def parse_command(message: str) -> dict:
         return {"type": "help", "stock_code": None, "time": None, "raw": msg}
     
     # ── 我的訂閱 ──────────────────────────
+    # 完整關鍵字
     my_sub_keywords = ["我的訂閱", "訂閱清單", "訂閱列表", "查看訂閱", "有訂閱什麼"]
     if any(kw in msg for kw in my_sub_keywords):
         return {"type": "list_subscriptions", "stock_code": None, "time": None, "raw": msg}
     
+    # 模糊匹配：處理常見錯字或簡寫
+    my_sub_fuzzy = ["我訂閱", "訂閱什麼", "我訂", "看訂閱", "訂閱有", "訂了什麼", "訂閱哪些"]
+    if any(kw in msg for kw in my_sub_fuzzy):
+        return {"type": "list_subscriptions", "stock_code": None, "time": None, "raw": msg}
+    
     # ── 我的警報 ──────────────────────────
+    # 完整關鍵字
     my_alert_keywords = ["我的警報", "警報清單", "警報列表", "查看警報", "有什麼警報"]
     if any(kw in msg for kw in my_alert_keywords):
+        return {"type": "list_alerts", "stock_code": None, "time": None, "raw": msg}
+    
+    # 模糊匹配：處理常見錯字或簡寫
+    my_alert_fuzzy = ["我警報", "警報什麼", "我警", "看警報", "警報有", "設了什麼警", "警報哪些", "有警報", "警報嗎"]
+    if any(kw in msg for kw in my_alert_fuzzy):
         return {"type": "list_alerts", "stock_code": None, "time": None, "raw": msg}
 
     # ── 開始/啟動 ─────────────────────────
@@ -264,6 +276,14 @@ def get_help_message() -> str:
         "【取消警報】\n"
         "  取消警報 代號\n"
         "  例：取消警報 2330\n"
+        "\n"
+        "【我的訂閱】\n"
+        "  我的訂閱 或 我訂\n"
+        "  查看目前訂閱清單\n"
+        "\n"
+        "【我的警報】\n"
+        "  我的警報 或 我警\n"
+        "  查看目前警報清單\n"
         "\n"
         "💡 支援公司名稱，例如：\n"
         "台積電、鴻海、GG 都可以！"
