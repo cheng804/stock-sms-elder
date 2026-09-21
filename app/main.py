@@ -214,8 +214,8 @@ def _handle_list_subscriptions(phone: str) -> str:
     
     lines = ["📬 您的訂閱清單：\n"]
     for i, sub in enumerate(subscriptions, 1):
-        stock_code = sub["stock_code"].replace(".TWO", "").replace(".TW", "")
-        notify_time = sub["notify_time"]
+        stock_code = sub.stock_code.replace(".TWO", "").replace(".TW", "")
+        notify_time = sub.notify_time
         lines.append(f"{i}. {stock_code} - 每天 {notify_time}")
     
     lines.append(f"\n共 {len(subscriptions)} 個訂閱")
