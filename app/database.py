@@ -821,3 +821,174 @@ def get_all_alerts_for_dashboard() -> List[dict]:
         ]
     finally:
         db.close()
+
+
+# ─────────────────────────────────────────
+#  後台統計資料（新增）
+# ─────────────────────────────────────────
+
+def get_weekly_query_trend() -> List[dict]:
+    """
+    取得最近 7 天的每日查詢趨勢。
+    
+    Returns:
+        [{"date": "2024-01-01", "count": 123}, ...]
+    """
+    from datetime import timedelta
+    db = get_db()
+    try:
+        result = []
+        for i in range(6, -1, -1):
+            date = datetime.utcnow() - timedelta(days=i)
+            start = date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=1)
+            
+            count = (
+                db.query(QueryLog)
+                .filter(
+                    QueryLog.created_at >= start,
+                    QueryLog.created_at < end,
+                )
+                .count()
+            )
+            
+            result.append({
+                "date": start.strftime("%m/%d"),
+                "count": count,
+            })
+        
+        return result
+    finally:
+        db.close()
+
+
+def get_popular_stocks_with_change(limit: int = 10) -> List[dict]:
+    """
+    取得熱門股票及其漲跌幅（需配合 stock_fetcher）。
+    
+    Returns:
+        [{"stock_code": "2330", "count": 50, "change_pct": 1.5}, ...]
+    """
+    from app.stock_fetcher import get_stock_info
+    
+    top_stocks = get_top_queried_stocks(limit=limit)
+    
+    result = []
+    for stock in top_stocks:
+        stock_code = stock["stock_code"]
+        try:
+            info = get_stock_info(stock_code)
+            change_pct = info.get("change_percent", 0) if info.get("success") else 0
+        except Exception:
+            change_pct = 0
+        
+        result.append({
+            "stock_code": stock_code,
+            "name": stock.get("name", stock_code),
+            "count": stock["count"],
+            "change_pct": change_pct,
+        })
+    
+    return result
+
+
+def get_user_engagement_stats() -> dict:
+    """
+    取得使用者參與度統計。
+    
+    Returns:
+        {
+            "active_users_today": int,      # 今天有查詢的使用者數
+            "subscribers": int,              # 有訂閱的使用者數
+            "alert_users": int,              # 有設定警報的使用者數
+            "avg_queries_per_user": float,   # 平均每人查詢次數
+        }
+    """
+    db = get_db()
+    try:
+        # 今天有查詢的使用者數
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        active_today = (
+            db.query(QueryLog.phone_number)
+            .filter(QueryLog.created_at >= today_start)
+            .distinct()
+            .count()
+        )
+        
+        # 有訂閱的使用者數
+        subscribers = (
+            db.query(Subscription.phone_number)
+            .filter(Subscription.is_active == True)
+            .distinct()
+            .count()
+        )
+        
+        # 有設定警報的使用者數
+        alert_users = (
+            db.query(PriceAlert.phone_number)
+            .filter(PriceAlert.is_active == True)
+            .distinct()
+            .count()
+        )
+        
+        # 平均每人查詢次數（全部時間）
+        total_queries = db.query(QueryLog).count()
+        total_users = db.query(User).count()
+        avg_queries = round(total_queries / total_users, 1) if total_users > 0 else 0
+        
+        return {
+            "active_users_today": active_today,
+            "subscribers": subscribers,
+            "alert_users": alert_users,
+            "avg_queries_per_user": avg_queries,
+        }
+    finally:
+        db.close()
+
+
+def get_command_type_stats_today() -> List[dict]:
+    """
+    取得今天各指令類型的統計（更詳細版本）。
+    
+    Returns:
+        [{"type": "price", "count": 50, "label": "查股價"}, ...]
+    """
+    db = get_db()
+    try:
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        from sqlalchemy import func
+        results = (
+            db.query(
+                QueryLog.query_type,
+                func.count(QueryLog.id).label("count")
+            )
+            .filter(QueryLog.created_at >= today_start)
+            .group_by(QueryLog.query_type)
+            .order_by(func.count(QueryLog.id).desc())
+            .all()
+        )
+        
+        type_labels = {
+            "price": "查股價",
+            "buy_analysis": "買賣分析",
+            "week_report": "週報告",
+            "subscribe": "訂閱",
+            "unsubscribe": "退訂",
+            "set_alert": "設定警報",
+            "remove_alert": "取消警報",
+            "help": "說明",
+            "safe_pick": "推薦股票",
+            "unknown": "無法識別",
+        }
+        
+        return [
+            {
+                "type": r.query_type,
+                "label": type_labels.get(r.query_type, r.query_type),
+                "count": r.count,
+            }
+            for r in results
+        ]
+    finally:
+        db.close()

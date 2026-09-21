@@ -180,6 +180,19 @@ def parse_command(message: str) -> dict:
                 "time": None,
                 "raw": msg,
             }
+    
+    # ── 週報告（一週漲跌）────────────────────
+    week_keywords = ["週報", "周報", "一週", "一周", "7天", "這週", "這周", "本週", "本周"]
+    has_week_keyword = any(kw in msg for kw in week_keywords)
+    if has_week_keyword:
+        stock_code = _extract_stock_code(msg)
+        if stock_code:
+            return {
+                "type": "week_report",
+                "stock_code": stock_code,
+                "time": None,
+                "raw": msg,
+            }
 
     # ── 單純查價：訊息幾乎只有股票代號 ───
     # 移除空白和標點後，若只剩股票代號則視為查價
@@ -215,11 +228,14 @@ def get_help_message() -> str:
         "【查股價】\n"
         "  直接傳股票代號\n"
         "  例：2330\n"
-        "  ※ 有爆量時會自動提示\n"
         "\n"
         "【買賣分析（含RSI）】\n"
         "  代號 買\n"
         "  例：2330買\n"
+        "\n"
+        "【一週漲跌】\n"
+        "  代號 週報 或 一週\n"
+        "  例：2330週報\n"
         "\n"
         "【訂閱每日通知】\n"
         "  訂閱 代號 時間\n"
@@ -239,5 +255,6 @@ def get_help_message() -> str:
         "  取消警報 代號\n"
         "  例：取消警報 2330\n"
         "\n"
-        "再傳「說明」可再看這則訊息。"
+        "💡 支援公司名稱，例如：\n"
+        "台積電、鴻海、GG 都可以！"
     )

@@ -139,6 +139,64 @@ def _handle_buy_analysis(stock_code: str, phone: str) -> str:
     return response
 
 
+def _handle_week_report(stock_code: str, phone: str) -> str:
+    """
+    處理週報告指令：顯示一週（7天）的漲跌幅。
+    """
+    from app.stock_fetcher import get_stock_info, get_stock_history
+    
+    info = get_stock_info(stock_code)
+    if not info.get("success"):
+        return info.get("error", f"😅 查不到 {stock_code}，請確認代號是否正確。")
+    
+    history = get_stock_history(stock_code, days=10)  # 多抓幾天確保有 7 天交易日
+    
+    if not history.get("success") or not history.get("prices"):
+        return f"😅 無法取得 {stock_code} 的歷史資料。"
+    
+    prices = history["prices"]
+    if len(prices) < 2:
+        return f"😅 {stock_code} 歷史資料不足，無法計算一週漲跌。"
+    
+    # 取最新價格和 7 天前（或最早）的價格
+    current_price = prices[-1]
+    week_ago_price = prices[-7] if len(prices) >= 7 else prices[0]
+    
+    week_change = current_price - week_ago_price
+    week_change_pct = (week_change / week_ago_price * 100) if week_ago_price else 0
+    
+    name = info.get("name", stock_code)
+    clean_code = stock_code.replace(".TWO", "").replace(".TW", "")
+    
+    # 格式化漲跌
+    if week_change > 0:
+        change_str = f"▲{week_change:.2f}"
+        emoji = "📈"
+        comment = "一週有漲喔！"
+    elif week_change < 0:
+        change_str = f"▼{abs(week_change):.2f}"
+        emoji = "📉"
+        comment = "一週有跌。"
+    else:
+        change_str = "持平"
+        emoji = "📊"
+        comment = "一週持平。"
+    
+    days_count = min(len(prices), 7)
+    
+    reply = (
+        f"{emoji} {name} 週報告\n"
+        f"代號：{clean_code}\n"
+        f"現價：{current_price:.2f} 元\n"
+        f"一週前：{week_ago_price:.2f} 元\n"
+        f"一週漲跌：{change_str} ({week_change_pct:+.2f}%)\n"
+        f"{comment}\n"
+        f"（統計近 {days_count} 個交易日）"
+    )
+    
+    return reply
+
+
 def _handle_subscribe(phone: str, stock_code: Optional[str], notify_time: str) -> str:
     """
     處理訂閱指令：寫入資料庫 -> 回傳確認訊息。
@@ -286,11 +344,14 @@ async def _process_message(from_phone: str, message_text: str):
             i_msg  = intent.get("message")
 
             if i_type == "safe_pick":
-                # 「買哪隻比較安全」類問題，直接回覆建議文字
-                intent_reply = i_msg or (
-                    "穩健型可考慮 0050（台灣50）或 0056（高股息）ETF，\n"
-                    "分散風險、長期持有，適合穩健投資。\n"
-                    "傳代號查看最新股價，例如：0050"
+                # 「買哪隻比較安全」類問題，回覆不方便告知
+                intent_reply = (
+                    "😊 不好意思，我不方便推薦特定股票喔！\n"
+                    "投資有風險，建議您：\n"
+                    "• 諮詢專業理財顧問\n"
+                    "• 考慮分散投資（如 0050、0056 ETF）\n"
+                    "• 根據自己的風險承受度決定\n"
+                    "傳股票代號可查看即時股價，例如：2330"
                 )
                 cmd_type = "safe_pick"
             elif i_type in ("price", "buy_analysis") and i_code:
@@ -343,6 +404,10 @@ async def _process_message(from_phone: str, message_text: str):
         elif cmd_type == "buy_analysis":
             log_query(from_phone, stock_code, cmd_type, None)
             reply = _handle_buy_analysis(stock_code, from_phone)
+            log_query(from_phone, stock_code, f"{cmd_type}_response", reply)
+        elif cmd_type == "week_report":
+            log_query(from_phone, stock_code, cmd_type, None)
+            reply = _handle_week_report(stock_code, from_phone)
             log_query(from_phone, stock_code, f"{cmd_type}_response", reply)
         elif cmd_type == "subscribe":
             reply = _handle_subscribe(from_phone, stock_code, notify_time)
