@@ -451,10 +451,17 @@ subs = load_subscriptions()
 
 if subs:
     df_subs = pd.DataFrame(subs)
-    # 不顯示完整號碼欄
-    display_subs = df_subs.drop(columns=["完整號碼"], errors="ignore")
-    st.dataframe(display_subs, use_container_width=True, hide_index=True)
-    st.caption(f"共 {len(subs)} 筆啟用訂閱")
+    # 過濾測試帳號 (手機號碼不是正常格式的)
+    # 正常台灣手機號碼應該是 09 開頭
+    df_subs = df_subs[df_subs["完整號碼"].str.startswith("09") | df_subs["完整號碼"].str.startswith("+886")]
+    
+    if len(df_subs) > 0:
+        # 不顯示完整號碼欄
+        display_subs = df_subs.drop(columns=["完整號碼"], errors="ignore")
+        st.dataframe(display_subs, use_container_width=True, hide_index=True)
+        st.caption(f"共 {len(df_subs)} 筆啟用訂閱")
+    else:
+        st.info("目前沒有啟用中的訂閱")
 else:
     st.info("目前沒有啟用中的訂閱")
 
@@ -471,67 +478,66 @@ user_activity = load_user_activity()
 if not user_activity:
     st.info("目前尚無使用者資料")
 else:
-    # ── 總覽表格 ──────────────────────────
-    df_users = pd.DataFrame(user_activity)
-    display_cols = ["手機後4碼", "狀態", "最愛股票", "總查詢次數", "最後查詢", "加入日期"]
-    st.dataframe(
-        df_users[display_cols],
-        use_container_width=True,
-        hide_index=True,
-    )
+    # 過濾:只顯示有查詢紀錄的用戶
+    active_users = [u for u in user_activity if u["總查詢次數"] > 0]
+    
+    if not active_users:
+        st.info("目前尚無活躍使用者")
+    else:
+        # ── 總覽表格 ──────────────────────────
+        df_users = pd.DataFrame(active_users)
+        display_cols = ["手機後4碼", "狀態", "最愛股票", "總查詢次數", "最後查詢", "加入日期"]
+        st.dataframe(
+            df_users[display_cols],
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(f"共 {len(active_users)} 位活躍使用者")
 
-    st.divider()
+        st.divider()
 
-    # ── 個別使用者深入分析 ────────────────
-    st.markdown("**🔍 個別使用者深入分析**")
+        # ── 個別使用者深入分析 ────────────────
+        st.markdown("**🔍 個別使用者深入分析**")
 
-    # 下拉選單：只顯示後4碼，但存完整號碼
-    phone_options = {
-        row["手機後4碼"]: row["_phone"]
-        for row in user_activity
-    }
-    selected_label = st.selectbox(
-        "選擇使用者",
-        options=list(phone_options.keys()),
-        index=0,
-    )
-    selected_phone = phone_options[selected_label]
+        # 下拉選單：只顯示後4碼，但存完整號碼
+        phone_options = {
+            row["手機後4碼"]: row["_phone"]
+            for row in active_users
+        }
+        selected_label = st.selectbox(
+            "選擇使用者",
+            options=list(phone_options.keys()),
+            index=0,
+        )
+        selected_phone = phone_options[selected_label]
 
     col_left, col_right = st.columns(2)
 
-    # ── 左欄：關注股池長條圖 ──────────────
+    # ── 左欄：關注股池 ──────────────
     with col_left:
-        st.markdown("**關注股池（查詢次數）**")
+        st.markdown("**📊 關注股池（最常查詢的股票）**")
         favorites = load_user_favorites(selected_phone)
 
         if favorites:
             df_fav = pd.DataFrame(favorites)
-            # 移除 .TW/.TWO 後綴讓圖表更簡潔
+            # 移除 .TW/.TWO 後綴讓顯示更簡潔
             df_fav["stock_code"] = df_fav["stock_code"].str.replace(
                 r"\.(TW|TWO)$", "", regex=True
             )
-            df_fav = df_fav.rename(columns={"stock_code": "股票代號", "count": "查詢次數"})
-            df_fav = df_fav.sort_values("查詢次數", ascending=True)
-
-            fig_fav = px.bar(
-                df_fav,
-                x="查詢次數",
-                y="股票代號",
-                orientation="h",
-                color="查詢次數",
-                color_continuous_scale="Teal",
-                text="查詢次數",
-                height=max(200, len(df_fav) * 45),
+            df_fav = df_fav.rename(columns={
+                "stock_code": "股票代號", 
+                "count": "查詢次數",
+                "last_queried": "最後查詢"
+            })
+            
+            # 使用表格顯示,更清楚
+            st.dataframe(
+                df_fav[["股票代號", "查詢次數"]],
+                use_container_width=True,
+                hide_index=True,
+                height=300,
             )
-            fig_fav.update_traces(textposition="outside")
-            fig_fav.update_layout(
-                showlegend=False,
-                coloraxis_showscale=False,
-                margin=dict(l=10, r=20, t=10, b=10),
-                xaxis_title="查詢次數",
-                yaxis_title="",
-            )
-            st.plotly_chart(fig_fav, use_container_width=True)
+            st.caption(f"共關注 {len(df_fav)} 支股票")
         else:
             st.info("此使用者尚無股票查詢紀錄")
 
@@ -568,9 +574,9 @@ else:
         else:
             st.info("此使用者尚無查詢紀錄")
 
-    # ── 行為指標卡片 ──────────────────────
-    st.markdown("**行為指標**")
-    selected_row = next(r for r in user_activity if r["_phone"] == selected_phone)
+        # ── 行為指標卡片 ──────────────────────
+        st.markdown("**行為指標**")
+        selected_row = next(r for r in active_users if r["_phone"] == selected_phone)
 
     m1, m2, m3, m4 = st.columns(4)
     with m1:
