@@ -992,3 +992,145 @@ def get_command_type_stats_today() -> List[dict]:
         ]
     finally:
         db.close()
+
+
+def get_recent_logs(limit: int = 50) -> List[dict]:
+    """
+    取得最近的查詢紀錄。
+
+    Args:
+        limit: 回傳筆數
+
+    Returns:
+        查詢紀錄列表
+    """
+    db = get_db()
+    try:
+        logs = (
+            db.query(QueryLog)
+            .order_by(QueryLog.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "created_at": log.created_at.strftime("%Y-%m-%d %H:%M:%S") if log.created_at else "",
+                "phone_number": log.phone_number or "",
+                "stock_code": log.stock_code or "",
+                "command_type": log.command_type or "",
+                "response_text": log.response_text or "",
+            }
+            for log in logs
+        ]
+    finally:
+        db.close()
+
+
+def get_all_users_with_activity() -> List[dict]:
+    """
+    取得所有使用者及其活動統計。
+
+    Returns:
+        使用者活動列表
+    """
+    db = get_db()
+    try:
+        users = db.query(User).all()
+        result = []
+        for user in users:
+            # 計算總查詢次數
+            total_queries = (
+                db.query(QueryLog)
+                .filter(QueryLog.phone_number == user.phone_number)
+                .count()
+            )
+            
+            # 取得最後查詢時間
+            last_log = (
+                db.query(QueryLog)
+                .filter(QueryLog.phone_number == user.phone_number)
+                .order_by(QueryLog.created_at.desc())
+                .first()
+            )
+            
+            # 取得最愛股票（查詢次數最多的）
+            favorite = (
+                db.query(
+                    QueryLog.stock_code,
+                    func.count(QueryLog.stock_code).label("count")
+                )
+                .filter(
+                    QueryLog.phone_number == user.phone_number,
+                    QueryLog.stock_code.isnot(None),
+                )
+                .group_by(QueryLog.stock_code)
+                .order_by(func.count(QueryLog.stock_code).desc())
+                .first()
+            )
+            
+            result.append({
+                "phone_number": user.phone_number,
+                "is_active": user.is_active,
+                "total_queries": total_queries,
+                "last_query_at": last_log.created_at if last_log else None,
+                "favorite_stock": favorite[0].replace(".TW", "").replace(".TWO", "") if favorite else None,
+                "created_at": user.created_at,
+            })
+        
+        return result
+    finally:
+        db.close()
+
+
+def get_user_query_today_count(phone: str) -> int:
+    """
+    取得使用者今日查詢次數。
+
+    Args:
+        phone: 使用者手機號碼
+
+    Returns:
+        今日查詢次數
+    """
+    from datetime import datetime, time
+    
+    db = get_db()
+    try:
+        today_start = datetime.combine(datetime.today(), time.min)
+        count = (
+            db.query(QueryLog)
+            .filter(
+                QueryLog.phone_number == phone,
+                QueryLog.created_at >= today_start,
+            )
+            .count()
+        )
+        return count
+    finally:
+        db.close()
+
+
+def get_all_alerts_for_dashboard() -> List[dict]:
+    """
+    取得所有價格警報（供 Dashboard 使用）。
+
+    Returns:
+        警報列表
+    """
+    db = get_db()
+    try:
+        alerts = db.query(PriceAlert).order_by(PriceAlert.created_at.desc()).all()
+        return [
+            {
+                "phone_number": alert.phone_number,
+                "stock_code": alert.stock_code,
+                "target_price": float(alert.target_price),
+                "direction": alert.direction,
+                "is_active": alert.is_active,
+                "triggered_at": alert.triggered_at.strftime("%Y-%m-%d %H:%M:%S") if alert.triggered_at else None,
+                "created_at": alert.created_at.strftime("%Y-%m-%d %H:%M:%S") if alert.created_at else "",
+            }
+            for alert in alerts
+        ]
+    finally:
+        db.close()

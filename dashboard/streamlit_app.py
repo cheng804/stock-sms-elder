@@ -405,7 +405,7 @@ if logs:
     # 回傳內容摘要（最多 50 字）
     if "response_text" in df_logs.columns:
         df_logs["回傳內容摘要"] = df_logs["response_text"].apply(
-            lambda x: (x[:50] + "…") if x and len(x) > 50 else (x or "")
+            lambda x: (str(x)[:50] + "…") if x and isinstance(x, str) and len(x) > 50 else (str(x) if x else "")
         )
 
     # 選取顯示欄位
