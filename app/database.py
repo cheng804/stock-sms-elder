@@ -1134,3 +1134,54 @@ def get_all_alerts_for_dashboard() -> List[dict]:
         ]
     finally:
         db.close()
+
+
+def get_all_subscriptions() -> List[Subscription]:
+    """
+    取得所有啟用的訂閱（供 Dashboard 使用）。
+
+    Returns:
+        Subscription 物件列表
+    """
+    db = get_db()
+    try:
+        return (
+            db.query(Subscription)
+            .filter(Subscription.is_active == True)
+            .order_by(Subscription.created_at.desc())
+            .all()
+        )
+    finally:
+        db.close()
+
+
+def get_user_query_history(phone: str, limit: int = 20) -> List[dict]:
+    """
+    取得指定使用者的查詢歷史紀錄。
+
+    Args:
+        phone: 使用者手機號碼
+        limit: 回傳筆數限制
+
+    Returns:
+        查詢紀錄列表
+    """
+    db = get_db()
+    try:
+        logs = (
+            db.query(QueryLog)
+            .filter(QueryLog.phone_number == phone)
+            .order_by(QueryLog.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "created_at": log.created_at,
+                "stock_code": log.stock_code or "",
+                "command_type": log.command_type or "",
+            }
+            for log in logs
+        ]
+    finally:
+        db.close()
