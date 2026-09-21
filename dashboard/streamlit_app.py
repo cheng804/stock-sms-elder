@@ -451,22 +451,11 @@ subs = load_subscriptions()
 
 if subs:
     df_subs = pd.DataFrame(subs)
-    # 過濾測試帳號 (手機號碼不是正常格式的)
-    # 正常台灣手機號碼應該是 09 開頭或 +886 開頭(移除空格後檢查)
-    df_subs["_clean_phone"] = df_subs["完整號碼"].str.replace(" ", "").str.replace("-", "")
-    df_subs = df_subs[
-        df_subs["_clean_phone"].str.startswith("09") | 
-        df_subs["_clean_phone"].str.startswith("+886")
-    ]
-    df_subs = df_subs.drop(columns=["_clean_phone"], errors="ignore")
     
-    if len(df_subs) > 0:
-        # 不顯示完整號碼欄
-        display_subs = df_subs.drop(columns=["完整號碼"], errors="ignore")
-        st.dataframe(display_subs, use_container_width=True, hide_index=True)
-        st.caption(f"共 {len(df_subs)} 筆啟用訂閱")
-    else:
-        st.info("目前沒有啟用中的訂閱")
+    # 不顯示完整號碼欄
+    display_subs = df_subs.drop(columns=["完整號碼"], errors="ignore")
+    st.dataframe(display_subs, use_container_width=True, hide_index=True)
+    st.caption(f"共 {len(df_subs)} 筆啟用訂閱")
 else:
     st.info("目前沒有啟用中的訂閱")
 
@@ -483,38 +472,32 @@ user_activity = load_user_activity()
 if not user_activity:
     st.info("目前尚無使用者資料")
 else:
-    # 過濾:只顯示有查詢紀錄的用戶
-    active_users = [u for u in user_activity if u["總查詢次數"] > 0]
-    
-    if not active_users:
-        st.info("目前尚無活躍使用者")
-    else:
-        # ── 總覽表格 ──────────────────────────
-        df_users = pd.DataFrame(active_users)
-        display_cols = ["手機後4碼", "狀態", "最愛股票", "總查詢次數", "最後查詢", "加入日期"]
-        st.dataframe(
-            df_users[display_cols],
-            use_container_width=True,
-            hide_index=True,
-        )
-        st.caption(f"共 {len(active_users)} 位活躍使用者")
+    # ── 總覽表格 ──────────────────────────
+    df_users = pd.DataFrame(user_activity)
+    display_cols = ["手機後4碼", "狀態", "最愛股票", "總查詢次數", "最後查詢", "加入日期"]
+    st.dataframe(
+        df_users[display_cols],
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.caption(f"共 {len(user_activity)} 位使用者")
 
-        st.divider()
+    st.divider()
 
-        # ── 個別使用者深入分析 ────────────────
-        st.markdown("**🔍 個別使用者深入分析**")
+    # ── 個別使用者深入分析 ────────────────
+    st.markdown("**🔍 個別使用者深入分析**")
 
-        # 下拉選單：只顯示後4碼，但存完整號碼
-        phone_options = {
-            row["手機後4碼"]: row["_phone"]
-            for row in active_users
-        }
-        selected_label = st.selectbox(
-            "選擇使用者",
-            options=list(phone_options.keys()),
-            index=0,
-        )
-        selected_phone = phone_options[selected_label]
+    # 下拉選單：只顯示後4碼，但存完整號碼
+    phone_options = {
+        row["手機後4碼"]: row["_phone"]
+        for row in user_activity
+    }
+    selected_label = st.selectbox(
+        "選擇使用者",
+        options=list(phone_options.keys()),
+        index=0,
+    )
+    selected_phone = phone_options[selected_label]
 
     col_left, col_right = st.columns(2)
 
@@ -579,9 +562,9 @@ else:
         else:
             st.info("此使用者尚無查詢紀錄")
 
-        # ── 行為指標卡片 ──────────────────────
-        st.markdown("**行為指標**")
-        selected_row = next(r for r in active_users if r["_phone"] == selected_phone)
+    # ── 行為指標卡片 ──────────────────────
+    st.markdown("**行為指標**")
+    selected_row = next(r for r in user_activity if r["_phone"] == selected_phone)
 
     m1, m2, m3, m4 = st.columns(4)
     with m1:
