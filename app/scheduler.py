@@ -183,6 +183,25 @@ def send_subscription_notifications(notify_time: str) -> None:
             logger.error(f"[排程] 處理訂閱 {phone}/{stock_code} 時發生錯誤：{e}")
 
 
+def _keep_alive() -> None:
+    """
+    每 10 分鐘 ping 自己的 /health 端點，避免 Render 免費方案閒置睡著。
+    """
+    import os
+    import requests
+
+    app_url = os.getenv("APP_URL", "").rstrip("/")
+    if not app_url:
+        logger.debug("[Keep-Alive] APP_URL 未設定，跳過 ping。")
+        return
+
+    try:
+        resp = requests.get(f"{app_url}/health", timeout=10)
+        logger.info(f"[Keep-Alive] Ping {app_url}/health -> {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"[Keep-Alive] Ping 失敗：{e}")
+
+
 def _check_and_notify() -> None:
     """
     每分鐘執行的任務：取得台灣時間，呼叫對應的通知函數。
@@ -237,6 +256,15 @@ def start_scheduler() -> Optional[BackgroundScheduler]:
             trigger=CronTrigger(second=0),
             id="check_subscriptions",
             name="每分鐘檢查訂閱通知",
+            replace_existing=True,
+        )
+
+        # 每 10 分鐘 ping 自己，避免 Render 閒置睡著
+        scheduler.add_job(
+            func=_keep_alive,
+            trigger=CronTrigger(minute="*/10"),
+            id="keep_alive",
+            name="Keep-Alive Ping",
             replace_existing=True,
         )
 
