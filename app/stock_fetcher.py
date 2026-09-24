@@ -152,10 +152,18 @@ def get_stock_info(stock_code: str) -> dict:
                     "error": f"找不到股票代號 {stock_code}，請確認是否正確。",
                 }
             
+            # 過濾掉 Close 為 0 或 NaN 的列（盤前未開盤的今日資料）
+            hist_valid = hist[hist["Close"].notna() & (hist["Close"] > 0)]
+            if hist_valid.empty:
+                return {
+                    "success": False,
+                    "code": normalized,
+                    "error": f"找不到 {stock_code} 的有效收盤資料。",
+                }
+            
             # 取最近兩筆有效資料
-            if len(hist) < 2:
-                # 只有一天資料，無法計算漲跌
-                last_row = hist.iloc[-1]
+            if len(hist_valid) < 2:
+                last_row = hist_valid.iloc[-1]
                 price = _safe_float(last_row["Close"])
                 return {
                     "success": True,
@@ -173,8 +181,8 @@ def get_stock_info(stock_code: str) -> dict:
                     "is_prev_close": True,
                 }
             
-            last_row = hist.iloc[-1]
-            prev_row = hist.iloc[-2]
+            last_row = hist_valid.iloc[-1]
+            prev_row = hist_valid.iloc[-2]
             price = _safe_float(last_row["Close"])
             prev_close = _safe_float(prev_row["Close"])
             change = round(price - prev_close, 2) if price and prev_close else None

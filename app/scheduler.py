@@ -168,8 +168,9 @@ def send_subscription_notifications(notify_time: str) -> None:
             else:
                 reply = generate_elder_friendly_analysis(info, history, "price")
 
+            clean_code = stock_code.replace(".TW", "").replace(".TWO", "")
             # 加上每日訂閱提示
-            reply = f"📬 每日通知 {notify_time}\n\n{reply}\n\n傳「取消 {stock_code}」可停止通知。"
+            reply = f"📬 每日通知 {notify_time}\n\n{reply}\n\n傳「取消 {clean_code}」可停止通知。"
 
             success = send_sms(phone, reply)
             log_query(phone, stock_code, "subscription_notify", reply)
