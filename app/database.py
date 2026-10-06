@@ -22,7 +22,9 @@ _RAW_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./stock_sms.db")
 
 # Render 免費 PostgreSQL 提供的 URL 以 "postgres://" 開頭，
 # SQLAlchemy 2.x 只接受 "postgresql://"，需要替換。
-DATABASE_URL = _RAW_DATABASE_URL.replace("postgres://", "postgresql://", 1)
+# 明確指定 psycopg2 driver，避免 SQLAlchemy 預設選用 psycopg（v3）。
+DATABASE_URL = _RAW_DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
+DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
 _is_sqlite = DATABASE_URL.startswith("sqlite")
 
