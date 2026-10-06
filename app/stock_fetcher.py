@@ -1,8 +1,9 @@
 """
 stock_fetcher.py - 股票資料抓取模組
 
-使用 yfinance 取得台股和美股的即時與歷史資料。
-使用 curl_cffi 模擬瀏覽器，避免被 Yahoo Finance 封鎖（HTTP 401/429）。
+台股：使用 TWSE 證交所官方即時 API（真正即時，無延遲）。
+美股：使用 yfinance（延遲約 15 分鐘）。
+歷史資料：全部使用 yfinance。
 """
 
 import re
@@ -18,7 +19,9 @@ from app.stock_name_map import get_stock_name
 # 抑制 yfinance 的 WARNING/ERROR log（404、401 等）
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
-# 使用 curl_cffi 模擬 Chrome 瀏覽器，避免雲端環境被 Yahoo Finance 封鎖
+logger = logging.getLogger(__name__)
+
+# 使用 curl_cffi 模擬 Chrome 瀏覽器，避免雲端環境被 Yahoo Finance 封鎖（美股用）
 try:
     from curl_cffi import requests as curl_requests
     _SESSION = curl_requests.Session(impersonate="chrome")
@@ -27,6 +30,112 @@ except ImportError:
 
 # 中文名稱快取（避免重複打 API）
 _NAME_CACHE: dict = {}
+
+# ── TWSE 即時 API（台股專用）────────────────────────────────────────────
+
+_TWSE_HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+
+def _is_tw_stock(stock_code: str) -> bool:
+    """判斷是否為台股代號（純數字 4~6 碼，或數字+英文字母如 00631L）"""
+    return bool(re.match(r"^\d{4,6}[A-Z]?$", stock_code.strip().upper()))
+
+
+def _fetch_twse_realtime(stock_code: str) -> Optional[dict]:
+    """
+    從 TWSE 官方即時 API 抓取台股報價（真正即時，非延遲）。
+
+    回傳 dict 或 None（查無資料）。
+    先查上市(tse)，若無資料改查上櫃(otc)。
+
+    TWSE msgArray 欄位說明：
+      z  = 最新成交價（盤中即時，收盤後為空字串）
+      y  = 昨日收盤價
+      o  = 今日開盤價
+      h  = 今日最高價
+      l  = 今日最低價
+      v  = 累計成交量（張）
+      n  = 公司簡稱
+      d  = 日期（YYYYMMDD）
+      t  = 最後成交時間（HH:MM:SS）
+    """
+    code = stock_code.strip().upper()
+    for prefix in ["tse", "otc"]:
+        try:
+            ex_ch = f"{prefix}_{code}.tw"
+            url = (
+                f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
+                f"?ex_ch={ex_ch}&json=1&delay=0"
+            )
+            r = req.get(url, timeout=8, headers=_TWSE_HEADERS)
+            data = r.json()
+            msg = data.get("msgArray", [])
+            if not msg:
+                continue
+            item = msg[0]
+            # z 欄位存在且非空字串才算有即時價
+            if item.get("z") or item.get("y"):
+                return item
+        except Exception as e:
+            logger.warning(f"TWSE API 查詢失敗 {code} ({prefix}): {e}")
+    return None
+
+
+def _parse_twse_item(item: dict, stock_code: str) -> dict:
+    """
+    將 TWSE msgArray 的單一 item 轉換為與 get_stock_info 相同的回傳格式。
+    """
+    def _f(val) -> Optional[float]:
+        try:
+            v = float(val)
+            return round(v, 2) if v > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    z = item.get("z", "")      # 最新成交價（盤中空字串表示未成交）
+    y = item.get("y", "")      # 昨收
+    o = item.get("o", "")      # 開盤
+    h = item.get("h", "")      # 最高
+    l = item.get("l", "")      # 最低
+    v = item.get("v", "")      # 成交量(張)
+    name = item.get("n", stock_code)
+
+    price_raw = z if z and z != "-" else y   # 盤中用即時價，盤前/盤後用昨收
+    price = _f(price_raw)
+    prev_close = _f(y)
+    is_prev_close = not (z and z != "-")     # True 表示非盤中，顯示昨收
+
+    change = None
+    change_pct = None
+    if price and prev_close and not is_prev_close:
+        change = round(price - prev_close, 2)
+        change_pct = round(change / prev_close * 100, 2)
+
+    try:
+        volume = int(float(v) * 1000) if v and v != "-" else None  # 張→股
+    except (TypeError, ValueError):
+        volume = None
+
+    # 從離線對應表補充更完整的中文名
+    offline_name = get_stock_name(stock_code.upper())
+    display_name = offline_name if offline_name else name
+
+    return {
+        "success": True,
+        "code": stock_code,
+        "name": display_name,
+        "price": price,
+        "change": change,
+        "change_percent": change_pct,
+        "volume": volume,
+        "open": _f(o),
+        "high": _f(h),
+        "low": _f(l),
+        "prev_close": prev_close,
+        "market_cap": None,      # TWSE API 不提供市值
+        "is_prev_close": is_prev_close,
+        "source": "twse",        # 標示資料來源
+    }
 
 
 def _fetch_chinese_name(code: str) -> str:
@@ -131,37 +240,61 @@ def get_stock_info(stock_code: str) -> dict:
     """
     取得股票即時資訊。
 
+    台股（純數字代號）：使用 TWSE 官方即時 API，無延遲。
+    美股（英文代號如 TSLA）：使用 yfinance，約延遲 15 分鐘。
+
     Args:
-        stock_code: 股票代號（台股輸入純數字即可，如 "2330"）
+        stock_code: 股票代號（台股輸入純數字即可，如 "2330"；美股如 "TSLA"）
 
     Returns:
         dict 包含 success, code, name, price, change, change_percent,
-        volume, open, high, low, prev_close, market_cap
+        volume, open, high, low, prev_close, market_cap, is_prev_close
     """
-    normalized = _normalize_stock_code(stock_code)
+    code = stock_code.strip().upper()
+
+    # ── 台股：走 TWSE 即時 API ──────────────────────────────────────
+    if _is_tw_stock(code):
+        try:
+            item = _fetch_twse_realtime(code)
+            if item:
+                return _parse_twse_item(item, code)
+            # TWSE 查無資料（代號錯誤）
+            return {
+                "success": False,
+                "code": code,
+                "error": f"找不到台股代號 {code}，請確認是否正確。",
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "code": code,
+                "error": f"抓取台股 {code} 資料時發生錯誤：{str(e)}",
+            }
+
+    # ── 美股 / ETF：走 yfinance（延遲約 15 分鐘）──────────────────
+    normalized = _normalize_stock_code(code)
     try:
         ticker, normalized = _try_get_ticker(normalized)
         info = ticker.info
 
         if not info or info.get("regularMarketPrice") is None:
-            hist = ticker.history(period="5d")  # 改用 5 天確保有足夠資料
+            hist = ticker.history(period="5d")
             if hist.empty:
                 return {
                     "success": False,
                     "code": normalized,
-                    "error": f"找不到股票代號 {stock_code}，請確認是否正確。",
+                    "error": f"找不到股票代號 {code}，請確認是否正確。",
                 }
-            
-            # 過濾掉 Close 為 0 或 NaN 的列（盤前未開盤的今日資料）
+
+            # 過濾掉 Close 為 0 或 NaN 的列
             hist_valid = hist[hist["Close"].notna() & (hist["Close"] > 0)]
             if hist_valid.empty:
                 return {
                     "success": False,
                     "code": normalized,
-                    "error": f"找不到 {stock_code} 的有效收盤資料。",
+                    "error": f"找不到 {code} 的有效收盤資料。",
                 }
-            
-            # 取最近兩筆有效資料
+
             if len(hist_valid) < 2:
                 last_row = hist_valid.iloc[-1]
                 price = _safe_float(last_row["Close"])
@@ -179,8 +312,9 @@ def get_stock_info(stock_code: str) -> dict:
                     "prev_close": None,
                     "market_cap": info.get("marketCap"),
                     "is_prev_close": True,
+                    "source": "yfinance",
                 }
-            
+
             last_row = hist_valid.iloc[-1]
             prev_row = hist_valid.iloc[-2]
             price = _safe_float(last_row["Close"])
@@ -200,32 +334,32 @@ def get_stock_info(stock_code: str) -> dict:
                 "low": _safe_float(last_row["Low"]),
                 "prev_close": prev_close,
                 "market_cap": info.get("marketCap"),
-                "is_prev_close": True,  # 標示這是前日收盤價
+                "is_prev_close": True,
+                "source": "yfinance",
             }
 
         price = _safe_float(info.get("regularMarketPrice"))
         prev_close = _safe_float(info.get("regularMarketPreviousClose"))
-        # 優先用 API 的漲跌，若沒有就自己算
         change = _safe_float(info.get("regularMarketChange"))
         if change is None and price and prev_close:
             change = round(price - prev_close, 2)
         elif change is not None:
             change = round(change, 2)
-        # 漲跌幅
+
         change_pct = _safe_float(info.get("regularMarketChangePercent"))
         if change_pct is None and change and prev_close:
             change_pct = round(change / prev_close * 100, 2)
         elif change_pct is not None:
             change_pct = round(change_pct, 2)
 
-        # Fallback：若 change 還是 None 或 prev_close 是 None，用近5天歷史算漲跌
+        # Fallback：若 change 還是 None，用近 5 天歷史算漲跌
         if (change is None or prev_close is None) and price is not None:
             try:
                 hist_fb = ticker.history(period="5d")
                 if len(hist_fb) >= 2:
                     today_close = _safe_float(hist_fb.iloc[-1]["Close"])
                     yesterday_close = _safe_float(hist_fb.iloc[-2]["Close"])
-                    if today_close is not None and yesterday_close is not None and yesterday_close != 0:
+                    if today_close and yesterday_close and yesterday_close != 0:
                         change = round(today_close - yesterday_close, 2)
                         change_pct = round(change / yesterday_close * 100, 2)
                         if prev_close is None:
@@ -246,14 +380,15 @@ def get_stock_info(stock_code: str) -> dict:
             "low": _safe_float(info.get("regularMarketDayLow")),
             "prev_close": prev_close,
             "market_cap": info.get("marketCap"),
-            "is_prev_close": False,  # 明確標示這是即時價格
+            "is_prev_close": False,
+            "source": "yfinance",
         }
 
     except Exception as e:
         return {
             "success": False,
             "code": normalized,
-            "error": f"抓取 {stock_code} 資料時發生錯誤：{str(e)}",
+            "error": f"抓取 {code} 資料時發生錯誤：{str(e)}",
         }
 
 
