@@ -35,13 +35,13 @@ if _is_sqlite:
         connect_args={"check_same_thread": False},
     )
 else:
-    # PostgreSQL：啟用連線池，避免 Render 免費方案閒置斷線
+    # PostgreSQL：最小化連線池，讓 Neon 能在閒置時自動睡眠省 CU-hour
     engine = create_engine(
         DATABASE_URL,
-        pool_pre_ping=True,      # 每次取用連線前先 ping，自動重連
-        pool_recycle=300,        # 5 分鐘回收閒置連線，防止 server 端踢掉
-        pool_size=5,
-        max_overflow=10,
+        pool_pre_ping=False,     # 關閉 pre-ping，避免持續喚醒 Neon
+        pool_recycle=600,        # 10 分鐘回收，減少不必要的連線活動
+        pool_size=2,             # 最小連線數
+        max_overflow=3,
     )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

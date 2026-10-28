@@ -184,6 +184,28 @@ def send_subscription_notifications(notify_time: str) -> None:
             logger.error(f"[排程] 處理訂閱 {phone}/{stock_code} 時發生錯誤：{e}")
 
 
+def _cleanup_old_logs() -> None:
+    """
+    清理 30 天前的 query_logs，避免資料表無限增長消耗 Neon 儲存空間。
+    每天凌晨 03:00（台灣時間）由排程器呼叫。
+    """
+    from datetime import timezone, timedelta
+    from app.database import SessionLocal, QueryLog
+
+    cutoff = datetime.utcnow() - timedelta(days=30)
+    db = SessionLocal()
+    try:
+        deleted = db.query(QueryLog).filter(QueryLog.created_at < cutoff).delete()
+        db.commit()
+        if deleted > 0:
+            logger.info(f"[清理] 已刪除 {deleted} 筆 30 天前的查詢紀錄。")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"[清理] 清理舊紀錄失敗：{e}")
+    finally:
+        db.close()
+
+
 def _keep_alive() -> None:
     """
     每 10 分鐘 ping 自己的 /health 端點，避免 Render 免費方案閒置睡著。
@@ -207,21 +229,29 @@ def _check_and_notify() -> None:
     """
     每分鐘執行的任務：取得台灣時間，呼叫對應的通知函數。
     週末（六、日）不發送訂閱通知和警報。
+    只在交易日 08:00~14:00 之間才查資料庫，其餘時間直接跳過，
+    讓 Neon 能在閒置時自動睡眠以節省 CU-hour。
     """
     from datetime import timezone, timedelta
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz)
     current_time = f"{now.hour:02d}:{now.minute:02d}"
     weekday = now.weekday()  # 0=週一, 6=週日
-    
+
     # 週末（5=週六, 6=週日）不發送通知
     if weekday >= 5:
         logger.debug(f"[排程] 今天是週末（weekday={weekday}），跳過通知。")
         return
-    
+
+    # 只在 08:00~14:00 之間才查資料庫（台股交易時段 + 開盤前通知）
+    # 其餘時間不觸碰資料庫，讓 Neon 進入睡眠狀態節省 CU-hour
+    if not (8 <= now.hour < 14):
+        logger.debug(f"[排程] 非活躍時段（{current_time}），跳過資料庫查詢。")
+        return
+
     logger.debug(f"[排程] 每分鐘檢查：台灣時間 {current_time}")
     send_subscription_notifications(current_time)
-    
+
     # 每天 08:30 執行警報檢查與 MACD 預警（僅平日）
     if current_time == "08:30":
         check_price_alerts()
@@ -266,6 +296,15 @@ def start_scheduler() -> Optional[BackgroundScheduler]:
             trigger=CronTrigger(minute="*/10"),
             id="keep_alive",
             name="Keep-Alive Ping",
+            replace_existing=True,
+        )
+
+        # 每天凌晨 03:00（台灣時間）清理 30 天前的 query_logs
+        scheduler.add_job(
+            func=_cleanup_old_logs,
+            trigger=CronTrigger(hour=19, minute=0),  # UTC 19:00 = 台灣 03:00
+            id="cleanup_logs",
+            name="清理舊查詢紀錄",
             replace_existing=True,
         )
 
