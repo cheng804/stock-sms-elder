@@ -1,14 +1,14 @@
 fastapi
 uvicorn
-yfinance
-finmind
+yfinance>=0.2.18
+finmind>=2.0.6
 openai>=1.0.0
 sqlalchemy
 python-dotenv
 apscheduler
 streamlit
 plotly
-pandas
+pandas>=2.0.0
 requests
 psycopg2-binary
 pytz
