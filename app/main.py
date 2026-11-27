@@ -59,6 +59,7 @@ from app.personal_advisor import get_personal_advice
 from app.intent_parser import parse_intent
 
 TEXTBEE_WEBHOOK_SECRET = os.getenv("TEXTBEE_WEBHOOK_SECRET", "")
+from app.database import (
     get_or_create_user,
     activate_user,
     deactivate_user,
