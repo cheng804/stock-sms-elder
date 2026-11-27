@@ -1,7 +1,6 @@
 fastapi
 uvicorn
 yfinance>=0.2.18
-finmind>=2.0.6
 openai>=1.0.0
 sqlalchemy
 python-dotenv
