@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# 資料庫
+*.db
+*.db-shm
+*.db-wal
+
+# 環境變數
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+
+# 測試檔案
+test_*.py
+simulate.py
+add_test_subscription.py
+
+# 系統檔案
+.DS_Store
+Thumbs.db

@@ -1,0 +1,746 @@
+"""
+main.py - FastAPI 主程式
+
+========================================
+教育用途聲明 / Educational Use Declaration
+========================================
+本專題為學校專題/畢業製作
+使用 FinMind 開源資料，僅供教育展示用途
+資料僅供參考，不構成投資建議
+========================================
+
+提供以下路由：
+    POST /webhook/sms  - textbee Webhook，接收簡訊並回應
+    GET  /health       - 健康檢查
+    GET  /api/stats    - Dashboard 統計資料
+    GET  /api/logs     - Dashboard 查詢紀錄
+
+簡訊處理流程：
+    1. 接收 textbee Webhook
+    2. 解析手機號碼與簡訊內容
+    3. 呼叫 parse_command 識別指令
+    4. 根據指令取得股票資料、呼叫 AI 分析
+    5. 透過 textbee API 回傳結果
+    6. 記錄查詢 log
+"""
+
+import logging
+import os
+from contextlib import asynccontextmanager
+from typing import Optional
+import asyncio
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
+
+# 導入設定檔並顯示教育聲明
+from app.config import print_startup_disclaimer, DATA_SOURCE, IS_EDUCATIONAL_PROJECT
+
+# 根據設定選擇資料源
+if DATA_SOURCE == "finmind":
+    from app.stock_fetcher_finmind import (
+        get_stock_info, get_stock_history, 
+        calculate_fair_value, calculate_rsi
+    )
+    logging.info("✅ 使用 FinMind 作為資料源（教育用途）")
+else:
+    from app.stock_fetcher import (
+        get_stock_info, get_stock_history,
+        calculate_fair_value, calculate_rsi
+    )
+    logging.info("⚠️  使用 yfinance 作為資料源（備用）")
+
+from app.sms_handler import parse_command, get_help_message
+from app.response_formatter import generate_elder_friendly_analysis, format_simple_response
+from app.sms_client import parse_incoming_webhook, verify_webhook_signature, send_sms
+from app.personal_advisor import get_personal_advice
+from app.intent_parser import parse_intent
+
+TEXTBEE_WEBHOOK_SECRET = os.getenv("TEXTBEE_WEBHOOK_SECRET", "")
+    get_or_create_user,
+    activate_user,
+    deactivate_user,
+    is_user_active,
+    log_query,
+    add_subscription,
+    remove_subscription,
+    get_total_users,
+    get_today_query_count,
+    get_today_sms_count,
+    get_active_subscription_count,
+    get_top_queried_stocks,
+    get_command_type_distribution,
+    get_recent_logs,
+    add_alert,
+    remove_alert,
+    get_active_alerts,
+)
+from app.scheduler import start_scheduler
+
+load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────
+#  Lifespan：啟動時順便啟動排程器
+# ─────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """應用程式生命週期管理：啟動排程器並顯示教育聲明。"""
+    # 顯示教育用途聲明
+    print_startup_disclaimer()
+    
+    logger.info("🚀 stock-sms-elder 服務啟動中...")
+    scheduler = start_scheduler()
+    yield
+    logger.info("👋 服務關閉，停止排程器...")
+    if scheduler and scheduler.running:
+        scheduler.shutdown(wait=False)
+
+
+# ─────────────────────────────────────────
+#  FastAPI App
+# ─────────────────────────────────────────
+
+app = FastAPI(
+    title="股票簡訊服務 API",
+    description="讓長輩用老人機傳簡訊查股票，自動回傳股票資訊。",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ─────────────────────────────────────────
+#  Helper：處理各種指令
+# ─────────────────────────────────────────
+
+def _handle_price(stock_code: str, phone: str) -> str:
+    """查價 + 近30天均價分析 + 個人化建議"""
+    info = get_stock_info(stock_code)
+    if not info.get("success"):
+        return info.get("error", f"😅 查不到 {stock_code}，請確認代號是否正確。")
+    history = get_stock_history(stock_code, days=30)
+    response = generate_elder_friendly_analysis(info, history, "price")
+
+    # 附加個人化建議（新用戶或無歷史時回傳空字串，不影響主回覆）
+    advice = get_personal_advice(phone, stock_code, current_price=info.get("price"))
+    if advice:
+        response = f"{response}\n\n{advice}"
+
+    return response
+
+
+def _handle_buy_analysis(stock_code: str, phone: str) -> str:
+    """
+    處理買賣分析指令：抓股票資料 + 歷史 + RSI -> 分析 -> 個人化建議 -> 回傳文字。
+    """
+    info = get_stock_info(stock_code)
+    if not info.get("success"):
+        return info.get("error", f"😅 查不到 {stock_code}，請確認代號是否正確。")
+    history = get_stock_history(stock_code, days=30)
+    rsi_data = calculate_rsi(stock_code)
+    response = generate_elder_friendly_analysis(info, history, "buy_analysis", rsi_data)
+
+    # 附加個人化建議
+    advice = get_personal_advice(phone, stock_code, current_price=info.get("price"))
+    if advice:
+        response = f"{response}\n\n{advice}"
+
+    return response
+
+
+def _handle_week_report(stock_code: str, phone: str) -> str:
+    """
+    處理週報告指令：顯示一週（7天）的漲跌幅。
+    """
+    from app.stock_fetcher import get_stock_info, get_stock_history
+    
+    info = get_stock_info(stock_code)
+    if not info.get("success"):
+        return info.get("error", f"😅 查不到 {stock_code}，請確認代號是否正確。")
+    
+    history = get_stock_history(stock_code, days=10)  # 多抓幾天確保有 7 天交易日
+    
+    if not history.get("success") or not history.get("closes"):
+        return f"😅 無法取得 {stock_code} 的歷史資料。"
+    
+    prices = history["closes"]
+    if len(prices) < 2:
+        return f"😅 {stock_code} 歷史資料不足，無法計算一週漲跌。"
+    
+    # 取最新價格和 7 天前（或最早）的價格
+    current_price = prices[-1]
+    week_ago_price = prices[-7] if len(prices) >= 7 else prices[0]
+    
+    week_change = current_price - week_ago_price
+    week_change_pct = (week_change / week_ago_price * 100) if week_ago_price else 0
+    
+    name = info.get("name", stock_code)
+    clean_code = stock_code.replace(".TWO", "").replace(".TW", "")
+    
+    # 格式化漲跌
+    if week_change > 0:
+        change_str = f"▲{week_change:.2f}"
+        emoji = "📈"
+        comment = "一週有漲喔！"
+    elif week_change < 0:
+        change_str = f"▼{abs(week_change):.2f}"
+        emoji = "📉"
+        comment = "一週有跌。"
+    else:
+        change_str = "持平"
+        emoji = "📊"
+        comment = "一週持平。"
+    
+    days_count = min(len(prices), 7)
+    
+    reply = (
+        f"{emoji} {name} 週報告\n"
+        f"代號：{clean_code}\n"
+        f"現價：{current_price:.2f} 元\n"
+        f"一週前：{week_ago_price:.2f} 元\n"
+        f"一週漲跌：{change_str} ({week_change_pct:+.2f}%)\n"
+        f"{comment}\n"
+        f"（統計近 {days_count} 個交易日）"
+    )
+    
+    return reply
+
+
+def _handle_list_subscriptions(phone: str) -> str:
+    """
+    處理「我的訂閱」查詢：列出使用者所有訂閱。
+    """
+    from app.database import get_user_subscriptions
+    
+    subscriptions = get_user_subscriptions(phone)
+    
+    if not subscriptions:
+        return (
+            "📭 您目前沒有訂閱任何股票。\n\n"
+            "💡 想每天自動收到股價通知？\n"
+            "傳「訂閱 2330 08:30」即可設定！"
+        )
+    
+    lines = ["📬 您的訂閱清單：\n"]
+    for i, sub in enumerate(subscriptions, 1):
+        stock_code = sub.stock_code.replace(".TWO", "").replace(".TW", "")
+        notify_time = sub.notify_time
+        lines.append(f"{i}. {stock_code} - 每天 {notify_time}")
+    
+    lines.append(f"\n共 {len(subscriptions)} 個訂閱")
+    lines.append("\n💡 取消訂閱請傳：取消 代號")
+    lines.append("例如：取消 2330")
+    
+    return "\n".join(lines)
+
+
+def _handle_list_alerts(phone: str) -> str:
+    """
+    處理「我的警報」查詢：列出使用者所有警報。
+    """
+    from app.database import get_db, PriceAlert
+    
+    db = get_db()
+    try:
+        alerts = (
+            db.query(PriceAlert)
+            .filter(
+                PriceAlert.phone_number == phone,
+                PriceAlert.is_active == True,
+            )
+            .all()
+        )
+    finally:
+        db.close()
+    
+    if not alerts:
+        return (
+            "🔕 您目前沒有設定任何警報。\n\n"
+            "💡 想在股價到達目標時收到通知？\n"
+            "傳「警報 2330 750」即可設定！\n"
+            "（跌破 750 時通知）\n\n"
+            "或傳「警報 2330 800 突破」\n"
+            "（突破 800 時通知）"
+        )
+    
+    lines = ["🔔 您的警報清單：\n"]
+    for i, alert in enumerate(alerts, 1):
+        stock_code = alert.stock_code.replace(".TWO", "").replace(".TW", "")
+        target = float(alert.target_price)
+        direction = "跌破" if alert.direction == "below" else "突破"
+        lines.append(f"{i}. {stock_code} - {direction} {target:.0f} 元")
+    
+    lines.append(f"\n共 {len(alerts)} 個警報")
+    lines.append("\n💡 取消警報請傳：取消警報 代號")
+    lines.append("例如：取消警報 2330")
+    
+    return "\n".join(lines)
+
+
+def _handle_subscribe(phone: str, stock_code: Optional[str], notify_time: str) -> str:
+    """
+    處理訂閱指令：寫入資料庫 -> 回傳確認訊息。
+
+    Args:
+        phone: 使用者手機號碼
+        stock_code: 股票代號
+        notify_time: 通知時間
+
+    Returns:
+        確認訊息
+    """
+    if not stock_code:
+        return (
+            "😅 請告訴我您要訂閱的股票代號\n\n"
+            "📱 正確格式：\n"
+            "訂閱 2330 08:30\n\n"
+            "💡 時間可省略（預設 08:30）\n"
+            "例如：訂閱 2330"
+        )
+    sub = add_subscription(phone, stock_code, notify_time)
+    return (
+        f"✅ 訂閱成功！\n"
+        f"股票：{stock_code}\n"
+        f"每天 {notify_time} 會傳通知給您。\n"
+        f"要取消請傳「取消 {stock_code}」"
+    )
+
+
+def _handle_unsubscribe(phone: str, stock_code: Optional[str]) -> str:
+    """
+    處理退訂指令：更新資料庫 -> 回傳確認訊息。
+    """
+    if not stock_code:
+        return "😅 請告訴我您要取消的股票代號，例如：取消 2330"
+    success = remove_subscription(phone, stock_code)
+    if success:
+        return f"✅ 已取消 {stock_code} 的訂閱，不再傳通知給您。"
+    else:
+        return f"😅 找不到您訂閱 {stock_code} 的紀錄，可能已經取消了。"
+
+
+def _handle_set_alert(phone: str, stock_code: Optional[str],
+                      target_price: Optional[float], direction: str) -> str:
+    """設定到價警報"""
+    if not stock_code:
+        return "😅 請告訴我要監控的股票代號，例如：警報 2330 750"
+    if target_price is None:
+        return "😅 請告訴我目標價格，例如：警報 2330 750"
+    from app.stock_fetcher import _normalize_stock_code
+    normalized = _normalize_stock_code(stock_code)
+    clean = stock_code.replace(".TWO", "").replace(".TW", "")
+    add_alert(phone, normalized, target_price, direction)
+    dir_text = f"突破 {target_price:.0f}" if direction == "above" else f"跌破 {target_price:.0f}"
+    return (
+        f"🔔 警報設定成功！\n"
+        f"股票：{clean}\n"
+        f"條件：{dir_text} 元時通知您\n"
+        f"系統每天早上 08:30 自動檢查。\n"
+        f"傳「取消警報 {clean}」可刪除。"
+    )
+
+
+def _handle_remove_alert(phone: str, stock_code: Optional[str]) -> str:
+    """取消價格警報"""
+    if not stock_code:
+        return "😅 請告訴我要取消警報的股票代號，例如：取消警報 2330"
+    from app.stock_fetcher import _normalize_stock_code
+    normalized = _normalize_stock_code(stock_code)
+    success = remove_alert(phone, normalized)
+    clean = stock_code.replace(".TWO", "").replace(".TW", "")
+    if success:
+        return f"✅ 已取消 {clean} 的價格警報。"
+    else:
+        return f"😅 找不到 {clean} 的警報紀錄，可能已經取消了。"
+
+
+# ─────────────────────────────────────────
+#  路由
+# ─────────────────────────────────────────
+
+# 已處理的 idempotency key（防止 textbee retry 重複處理）
+_PROCESSED_KEYS: set = set()
+
+@app.post("/webhook/sms")
+async def webhook_sms(request: Request):
+    """
+    textbee Webhook 端點，接收簡訊並處理
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+
+    # 驗證簽章（未設定 secret 時跳過）
+    signature = request.headers.get("X-Signature", "")
+    logger.info(f"Webhook 收到：event={body.get('webhookEvent')}, has_secret={bool(TEXTBEE_WEBHOOK_SECRET)}, has_signature={bool(signature)}")
+    if TEXTBEE_WEBHOOK_SECRET and not verify_webhook_signature(body, signature):
+        logger.warning("Webhook 簽章驗證失敗，拒絕請求")
+        return JSONResponse({"error": "invalid signature"}, status_code=401)
+
+    # 只處理收到簡訊的事件
+    if body.get("webhookEvent") != "MESSAGE_RECEIVED":
+        return JSONResponse({"ok": True})
+
+    # 去重：同一則簡訊只處理一次
+    idempotency_key = body.get("idempotencyKey", "")
+    if idempotency_key and idempotency_key in _PROCESSED_KEYS:
+        logger.info(f"重複的 webhook，跳過：{idempotency_key}")
+        return JSONResponse({"ok": True})
+    if idempotency_key:
+        _PROCESSED_KEYS.add(idempotency_key)
+        # 避免記憶體無限增長，超過 1000 筆就清空舊的
+        if len(_PROCESSED_KEYS) > 1000:
+            _PROCESSED_KEYS.clear()
+
+    try:
+        parsed = parse_incoming_webhook(body)
+        from_phone = parsed["from_phone"]
+        message_text = parsed["message"]
+
+        logger.info(f"收到簡訊 from={from_phone}：{message_text!r}")
+
+        # 立刻回傳 200，背景處理（避免 textbee timeout 重試）
+        asyncio.create_task(_process_message(from_phone, message_text))
+
+    except Exception as e:
+        logger.exception(f"解析 Webhook 時發生錯誤：{e}")
+
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/test")
+async def test_message(request: Request):
+    """
+    測試介面專用 API，不發送真實簡訊，直接返回系統回覆
+    """
+    try:
+        body = await request.json()
+        phone = body.get("phone", "")
+        message = body.get("message", "")
+        
+        if not phone or not message:
+            return JSONResponse({
+                "success": False,
+                "error": "手機號碼和訊息內容不能為空"
+            }, status_code=400)
+        
+        logger.info(f"[測試模式] 收到測試請求 from={phone}：{message!r}")
+        
+        # 確保使用者存在
+        get_or_create_user(phone)
+        
+        # 解析指令
+        command = parse_command(message)
+        cmd_type = command["type"]
+        stock_code = command.get("stock_code")
+        notify_time = command.get("time") or "08:30"
+        
+        # 若無法識別，改用 intent_parser
+        if cmd_type == "unknown":
+            intent = parse_intent(message)
+            i_type = intent.get("type", "unknown")
+            i_code = intent.get("stock_code")
+            i_msg = intent.get("message")
+
+            if i_type == "safe_pick":
+                reply = (
+                    "😊 不好意思，我不方便推薦特定股票喔！\n"
+                    "投資有風險，建議您：\n"
+                    "• 諮詢專業理財顧問\n"
+                    "• 考慮分散投資（如 0050、0056 ETF）\n"
+                    "• 根據自己的風險承受度決定\n"
+                    "傳股票代號可查看即時股價，例如：2330"
+                )
+            elif i_type in ("price", "buy_analysis") and i_code:
+                cmd_type = i_type
+                stock_code = i_code
+            elif i_type == "help":
+                cmd_type = "help"
+            elif i_msg:
+                reply = i_msg
+            else:
+                reply = (
+                    "😅 看不懂您的指令。\n\n"
+                    "📱 常用功能：\n"
+                    "• 直接傳代號查股價（如：2330）\n"
+                    "• 我訂 - 查看我的訂閱\n"
+                    "• 我警 - 查看我的警報\n"
+                    "• 說明 - 看完整操作方式"
+                )
+        
+        # 處理不同指令類型
+        reply = None
+        
+        if cmd_type == "start":
+            activate_user(phone)
+            reply = (
+                "👋 您好！股票查詢服務已開啟！\n\n"
+                "📱 操作方式：\n"
+                "• 傳股票代號查股價（如：2330）\n"
+                "• 傳「訂閱 2330」每日自動通知\n"
+                "• 傳「說明」看完整指令\n\n"
+                "傳「停止」可關閉服務。"
+            )
+        elif cmd_type == "stop":
+            deactivate_user(phone)
+            reply = "👋 服務已關閉。傳「開始」可以重新啟用。"
+        elif not is_user_active(phone):
+            reply = "⚠️ 您尚未啟用服務，請先傳「開始」啟用。"
+        elif cmd_type == "price":
+            reply = _handle_price(stock_code, phone)
+        elif cmd_type == "buy_analysis":
+            reply = _handle_buy_analysis(stock_code, phone)
+        elif cmd_type == "week_report":
+            reply = _handle_week_report(stock_code, phone)
+        elif cmd_type == "subscribe":
+            reply = _handle_subscribe(phone, stock_code, notify_time)
+        elif cmd_type == "unsubscribe":
+            reply = _handle_unsubscribe(phone, stock_code)
+        elif cmd_type == "set_alert":
+            target_price = command.get("target_price")
+            direction = command.get("direction", "below")
+            reply = _handle_set_alert(phone, stock_code, target_price, direction)
+        elif cmd_type == "remove_alert":
+            reply = _handle_remove_alert(phone, stock_code)
+        elif cmd_type == "help":
+            reply = get_help_message()
+        elif cmd_type == "list_subscriptions":
+            reply = _handle_list_subscriptions(phone)
+        elif cmd_type == "list_alerts":
+            reply = _handle_list_alerts(phone)
+        
+        if not reply:
+            reply = "❌ 無法處理此指令"
+        
+        # 記錄 log
+        log_query(phone, stock_code, f"test_{cmd_type}", reply)
+        
+        logger.info(f"[測試模式] 回覆內容長度：{len(reply)}")
+        
+        return JSONResponse({
+            "success": True,
+            "reply": reply
+        })
+        
+    except Exception as e:
+        logger.exception(f"[測試模式] 處理時發生錯誤：{e}")
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        }, status_code=500)
+
+
+async def _process_message(from_phone: str, message_text: str):
+    """背景處理簡訊邏輯"""
+    logger.info(f"開始處理背景訊息：from={from_phone}, text={message_text!r}")
+    try:
+        # 確保使用者存在
+        get_or_create_user(from_phone)
+
+        # ── 意圖解析：先用 parse_command 處理明確指令 ──────────
+        command = parse_command(message_text)
+        cmd_type = command["type"]
+        stock_code = command.get("stock_code")
+        notify_time = command.get("time") or "08:30"
+        intent_reply = None  # intent_parser 產生的直接回覆
+
+        # 若 parse_command 無法識別（unknown），改用 intent_parser 處理模糊語意
+        if cmd_type == "unknown":
+            intent = parse_intent(message_text)
+            i_type = intent.get("type", "unknown")
+            i_code = intent.get("stock_code")
+            i_msg  = intent.get("message")
+
+            if i_type == "safe_pick":
+                # 「買哪隻比較安全」類問題，回覆不方便告知
+                intent_reply = (
+                    "😊 不好意思，我不方便推薦特定股票喔！\n"
+                    "投資有風險，建議您：\n"
+                    "• 諮詢專業理財顧問\n"
+                    "• 考慮分散投資（如 0050、0056 ETF）\n"
+                    "• 根據自己的風險承受度決定\n"
+                    "傳股票代號可查看即時股價，例如：2330"
+                )
+                cmd_type = "safe_pick"
+            elif i_type in ("price", "buy_analysis") and i_code:
+                cmd_type  = i_type
+                stock_code = i_code
+                command["stock_code"] = i_code
+            elif i_type == "help":
+                cmd_type = "help"
+            elif i_msg:
+                # GPT 給了回覆但不知道怎麼處理，直接用 GPT 的回覆
+                intent_reply = i_msg
+                cmd_type = "gpt_reply"
+
+        # 開始指令：任何人都可以用，啟用服務
+        if cmd_type == "start":
+            activate_user(from_phone)
+            reply = (
+                "👋 您好！股票查詢服務已開啟！\n\n"
+                "📱 操作方式：\n"
+                "• 傳股票代號查股價（如：2330）\n"
+                "• 傳「訂閱 2330」每日自動通知\n"
+                "• 傳「說明」看完整指令\n\n"
+                "傳「停止」可關閉服務。"
+            )
+            log_query(from_phone, None, "start", reply)
+            send_sms(from_phone, reply)
+            return
+
+        # 停止指令
+        if cmd_type == "stop":
+            deactivate_user(from_phone)
+            reply = "👋 服務已關閉。傳「開始」可以重新啟用。"
+            log_query(from_phone, None, "stop", reply)
+            send_sms(from_phone, reply)
+            return
+
+        # 未啟用：完全不回應（避免廣告簡訊浪費額度）
+        if not is_user_active(from_phone):
+            logger.info(f"未啟用用戶 {from_phone} 傳訊息，忽略不回應")
+            return
+
+        # 根據指令處理
+        if cmd_type == "price":
+            # 先記錄本次查詢，讓個人化建議能讀到最新計數（含本次）
+            log_query(from_phone, stock_code, cmd_type, None)
+            reply = _handle_price(stock_code, from_phone)
+            # 更新回覆內容到 log
+            log_query(from_phone, stock_code, f"{cmd_type}_response", reply)
+        elif cmd_type == "buy_analysis":
+            log_query(from_phone, stock_code, cmd_type, None)
+            reply = _handle_buy_analysis(stock_code, from_phone)
+            log_query(from_phone, stock_code, f"{cmd_type}_response", reply)
+        elif cmd_type == "week_report":
+            log_query(from_phone, stock_code, cmd_type, None)
+            reply = _handle_week_report(stock_code, from_phone)
+            log_query(from_phone, stock_code, f"{cmd_type}_response", reply)
+        elif cmd_type == "subscribe":
+            reply = _handle_subscribe(from_phone, stock_code, notify_time)
+        elif cmd_type == "unsubscribe":
+            reply = _handle_unsubscribe(from_phone, stock_code)
+        elif cmd_type == "set_alert":
+            target_price = command.get("target_price")
+            direction = command.get("direction", "below")
+            reply = _handle_set_alert(from_phone, stock_code, target_price, direction)
+        elif cmd_type == "remove_alert":
+            reply = _handle_remove_alert(from_phone, stock_code)
+        elif cmd_type == "help":
+            reply = get_help_message()
+        elif cmd_type == "list_subscriptions":
+            reply = _handle_list_subscriptions(from_phone)
+        elif cmd_type == "list_alerts":
+            reply = _handle_list_alerts(from_phone)
+        elif cmd_type in ("safe_pick", "gpt_reply"):
+            reply = intent_reply
+        else:
+            reply = (
+                "😅 看不懂您的指令。\n\n"
+                "📱 常用功能：\n"
+                "• 直接傳代號查股價（如：2330）\n"
+                "• 我訂 - 查看我的訂閱\n"
+                "• 我警 - 查看我的警報\n"
+                "• 說明 - 看完整操作方式"
+            )
+        # 記錄 log（price/buy_analysis 已在上面記錄，其他在這裡記錄）
+        if cmd_type not in ("price", "buy_analysis", "week_report"):
+            log_query(from_phone, stock_code, cmd_type, reply)
+
+        # 主動發送回覆簡訊
+        logger.info(f"準備發送簡訊給 {from_phone}，內容長度：{len(reply)}")
+        send_sms(from_phone, reply)
+        logger.info(f"簡訊發送完成給 {from_phone}")
+
+    except Exception as e:
+        logger.exception(f"處理訊息時發生未預期錯誤：{e}")
+        # 嘗試發送錯誤通知給使用者
+        try:
+            error_reply = "😅 抱歉，系統處理時遇到問題，請稍後再試。"
+            send_sms(from_phone, error_reply)
+        except:
+            logger.error(f"無法發送錯誤通知給 {from_phone}")
+
+
+@app.api_route("/health", methods=["GET", "HEAD"])
+async def health_check():
+    """服務健康檢查端點。"""
+    return JSONResponse({"status": "ok", "service": "stock-sms-elder"})
+
+
+@app.get("/api/stats")
+async def get_stats():
+    """
+    取得 Dashboard 用的統計資料。
+
+    Returns:
+        JSON 包含：
+            - total_users: 總使用者數
+            - today_queries: 今日查詢次數
+            - today_sms_sent: 今日發送簡訊次數
+            - active_subscriptions: 活躍訂閱數
+            - top_stocks: 今日查詢前 5 名股票
+            - command_distribution: 指令類型分佈
+    """
+    try:
+        return JSONResponse({
+            "total_users": get_total_users(),
+            "today_queries": get_today_query_count(),
+            "today_sms_sent": get_today_sms_count(),
+            "active_subscriptions": get_active_subscription_count(),
+            "top_stocks": get_top_queried_stocks(limit=5),
+            "command_distribution": get_command_type_distribution(),
+        })
+    except Exception as e:
+        logger.error(f"取得統計資料失敗：{e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/logs")
+async def get_logs(limit: int = 50):
+    """
+    取得最近的查詢紀錄（Dashboard 用）。
+
+    Args:
+        limit: 回傳筆數，預設 50，最大 200
+
+    Returns:
+        JSON 包含 logs 列表
+    """
+    try:
+        limit = min(limit, 200)
+        logs = get_recent_logs(limit=limit)
+        return JSONResponse({"logs": logs, "count": len(logs)})
+    except Exception as e:
+        logger.error(f"取得查詢紀錄失敗：{e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ─────────────────────────────────────────
+#  Dev 直接執行
+# ─────────────────────────────────────────
+
+if __name__ == "__main__":
+    import uvicorn
+
+    host = os.getenv("APP_HOST", "0.0.0.0")
+    port = int(os.getenv("APP_PORT", "8000"))
+    uvicorn.run("app.main:app", host=host, port=port, reload=True)

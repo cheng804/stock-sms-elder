@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+yfinance
+finmind
+openai>=1.0.0
+sqlalchemy
+python-dotenv
+apscheduler
+streamlit
+plotly
+pandas
+requests
+psycopg2-binary
+pytz
